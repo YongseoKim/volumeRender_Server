@@ -1,0 +1,4 @@
+# Format: label,name,(r,g,b) or label,name,(r,g,b,a)
+1,Tumor Core,(255,140,38,140)
+2,Whole Tumor,(64,242,77,89)
+4,Enhancing Tumor,(242,64,230,166)
