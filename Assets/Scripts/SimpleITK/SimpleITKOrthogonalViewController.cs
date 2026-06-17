@@ -76,10 +76,6 @@ namespace SimpleITKUnity
 
 
         [Header("Slice Position (0..1)")]
-        [SerializeField] private Slider sliceSliderX;
-        [SerializeField] private Slider sliceSliderY;
-        [SerializeField] private Slider sliceSliderZ;
-
         [SerializeField, Range(0f, 1f)] private float sliceX = 0.5f;
         [SerializeField, Range(0f, 1f)] private float sliceY = 0.5f;
         [SerializeField, Range(0f, 1f)] private float sliceZ = 0.5f;
@@ -104,8 +100,6 @@ namespace SimpleITKUnity
         [SerializeField, Range(0.01f, 0.5f)] private float scaleStep = 0.06f;
         [SerializeField, Range(0.2f, 3.0f)] private float minScale = 0.2f;
         [SerializeField, Range(0.5f, 4.0f)] private float maxScale = 2.5f;
-        [SerializeField] private Button resetButton;
-        [SerializeField] private KeyCode volumeResetKey = KeyCode.R;
 
         [Header("Cameras")]
         [SerializeField] private Camera cameraA;
@@ -120,7 +114,7 @@ namespace SimpleITKUnity
         [SerializeField] private RawImage rawImageA;
         [SerializeField] private RawImage rawImageB;
         [SerializeField] private RawImage rawImageC;
-
+        [SerializeField] private RawImage rawImage3D;
 
 
         private Transform _mprRoot;
@@ -153,6 +147,7 @@ namespace SimpleITKUnity
         private RenderTexture _sliceRenderTextureA;
         private RenderTexture _sliceRenderTextureB;
         private RenderTexture _sliceRenderTextureC;
+        private RenderTexture _renderTexture3D;
 
         [Flags]
         private enum MprApplyDirty
@@ -178,6 +173,7 @@ namespace SimpleITKUnity
         private Vector2Int _cachedRawImageSizeA = new Vector2Int(int.MinValue, int.MinValue);
         private Vector2Int _cachedRawImageSizeB = new Vector2Int(int.MinValue, int.MinValue);
         private Vector2Int _cachedRawImageSizeC = new Vector2Int(int.MinValue, int.MinValue);
+        private Vector2Int _cachedRawImageSize3D = new Vector2Int(int.MinValue, int.MinValue);
 #if UNITY_EDITOR
         private bool _editorValidateRefreshQueued;
 #endif
@@ -245,8 +241,6 @@ namespace SimpleITKUnity
             _setupDirty = false;
             ApplyAll();
             CaptureInitialVolumeTransformIfNeeded();
-            SetupSliceSliderUi();
-            SetupResetButtonUi();
         }
 
         private void Update()
@@ -331,6 +325,7 @@ namespace SimpleITKUnity
             PollRawImageLayoutDirty(rawImageA, ref _cachedRawImageSizeA);
             PollRawImageLayoutDirty(rawImageB, ref _cachedRawImageSizeB);
             PollRawImageLayoutDirty(rawImageC, ref _cachedRawImageSizeC);
+            PollRawImageLayoutDirty(rawImage3D, ref _cachedRawImageSize3D);
         }
 
         private void PollRawImageLayoutDirty(RawImage rawImage, ref Vector2Int cachedSize)
@@ -358,7 +353,6 @@ namespace SimpleITKUnity
             sliceX = Mathf.Clamp01(sliceX);
             sliceY = Mathf.Clamp01(sliceY);
             sliceZ = Mathf.Clamp01(sliceZ);
-            SyncSliceSlidersFromFields();
 
             minGlobalZoom = Mathf.Max(0.1f, minGlobalZoom);
             maxGlobalZoom = Mathf.Max(minGlobalZoom + 0.01f, maxGlobalZoom);
@@ -403,9 +397,7 @@ namespace SimpleITKUnity
             ReleaseSliceRenderTexture(ref _sliceRenderTextureA, cameraA, rawImageA);
             ReleaseSliceRenderTexture(ref _sliceRenderTextureB, cameraB, rawImageB);
             ReleaseSliceRenderTexture(ref _sliceRenderTextureC, cameraC, rawImageC);
-
-            TeardownSliceSliderUi();
-            TeardownResetButtonUi();
+            ReleaseSliceRenderTexture(ref _renderTexture3D, camera3D, rawImage3D);
         }
 
         private void ResolveTarget()
@@ -441,6 +433,7 @@ namespace SimpleITKUnity
             rawImageA = ResolveRawImage(rawImageA, "RawImage_A");
             rawImageB = ResolveRawImage(rawImageB, "RawImage_B");
             rawImageC = ResolveRawImage(rawImageC, "RawImage_C");
+            rawImage3D = ResolveRawImage(rawImage3D, "RawImage_3D");
             ApplySliceViewRotations();
         }
 
@@ -787,8 +780,6 @@ namespace SimpleITKUnity
 
         private void EnsureCameras()
         {
-            // MPR_3D is scene-owned; this controller does not resolve, create, or configure camera3D.
-
             cameraA = ResolveOrCreateNamedCamera(cameraA, "MPR_A");
             cameraB = ResolveOrCreateNamedCamera(cameraB, "MPR_B");
             cameraC = ResolveOrCreateNamedCamera(cameraC, "MPR_C");
@@ -811,6 +802,31 @@ namespace SimpleITKUnity
             EnsureUprCameraData(cameraA);
             EnsureUprCameraData(cameraB);
             EnsureUprCameraData(cameraC);
+
+            if (rawImage3D != null)
+            {
+                camera3D = ResolveSceneNamedCamera(camera3D, "MPR_3D");
+                if (camera3D != null)
+                {
+                    EnsureUprCameraData(camera3D);
+                }
+            }
+        }
+
+        private static Camera ResolveSceneNamedCamera(Camera existing, string cameraName)
+        {
+            if (existing != null)
+            {
+                return existing;
+            }
+
+            if (string.IsNullOrEmpty(cameraName))
+            {
+                return null;
+            }
+
+            var obj = GameObject.Find(cameraName);
+            return obj != null ? obj.GetComponent<Camera>() : null;
         }
 
         private Camera ResolveOrCreateNamedCamera(Camera existing, string cameraName)
@@ -1263,21 +1279,23 @@ namespace SimpleITKUnity
             }
 
             ResolveSliceRawImages();
-            var sliceOutputsToRawImage = rawImageA != null || rawImageB != null || rawImageC != null;
+            var paneOutputsToRawImage = rawImageA != null || rawImageB != null || rawImageC != null || rawImage3D != null;
             AssignSliceCameraOutput(cameraA, rawImageA, ref _sliceRenderTextureA, "MPR_RT_A");
             AssignSliceCameraOutput(cameraB, rawImageB, ref _sliceRenderTextureB, "MPR_RT_B");
             AssignSliceCameraOutput(cameraC, rawImageC, ref _sliceRenderTextureC, "MPR_RT_C");
+            AssignSliceCameraOutput(camera3D, rawImage3D, ref _renderTexture3D, "MPR_RT_3D");
 
-            // A/B/C: off-screen RT displayed on UI RawImages above. MPR_3D layout is not driven here.
-            ApplyPaneViewport(cameraA, Pane.A, new Rect(0f, 0.5f, 0.5f, 0.5f), 0, sliceOutputsToRawImage);
-            ApplyPaneViewport(cameraB, Pane.B, new Rect(0.5f, 0.5f, 0.5f, 0.5f), 1, sliceOutputsToRawImage);
-            ApplyPaneViewport(cameraC, Pane.C, new Rect(0f, 0f, 0.5f, 0.5f), 2, sliceOutputsToRawImage);
+            ApplyPaneViewport(cameraA, Pane.A, new Rect(0f, 0.5f, 0.5f, 0.5f), 0, paneOutputsToRawImage);
+            ApplyPaneViewport(cameraB, Pane.B, new Rect(0.5f, 0.5f, 0.5f, 0.5f), 1, paneOutputsToRawImage);
+            ApplyPaneViewport(cameraC, Pane.C, new Rect(0f, 0f, 0.5f, 0.5f), 2, paneOutputsToRawImage);
+            ApplyPaneViewport(camera3D, Pane.D3, new Rect(0.5f, 0f, 0.5f, 0.5f), 3, paneOutputsToRawImage);
 
-            if (sliceOutputsToRawImage)
+            if (paneOutputsToRawImage)
             {
                 SyncSliceCameraEnabledForUiOutput(cameraA, rawImageA);
                 SyncSliceCameraEnabledForUiOutput(cameraB, rawImageB);
                 SyncSliceCameraEnabledForUiOutput(cameraC, rawImageC);
+                SyncSliceCameraEnabledForUiOutput(camera3D, rawImage3D);
             }
 
             cameraA.orthographic = true;
@@ -1307,14 +1325,14 @@ namespace SimpleITKUnity
             cam.enabled = true;
             cam.depth = defaultDepth;
 
-            var sliceRawImage = renderSliceToRawImage ? GetSliceRawImage(pane) : null;
-            if (sliceRawImage != null)
+            var paneRawImage = renderSliceToRawImage ? GetPaneRawImage(pane) : null;
+            if (paneRawImage != null)
             {
                 // RenderTexture is displayed on a RawImage: fill the full RT so content is centered in the UI rect.
                 cam.rect = FullPaneViewportRect;
-                if (!sliceRawImage.gameObject.activeSelf)
+                if (!paneRawImage.gameObject.activeSelf)
                 {
-                    sliceRawImage.gameObject.SetActive(true);
+                    paneRawImage.gameObject.SetActive(true);
                 }
                 return;
             }
@@ -1329,8 +1347,25 @@ namespace SimpleITKUnity
                 return;
             }
 
-            // Slice views are shown only via RawImage; do not paint quads over the 3D background.
+            // Pane views are shown only via RawImage; do not paint over the screen background.
             cam.enabled = rawImage != null;
+        }
+
+        private RawImage GetPaneRawImage(Pane pane)
+        {
+            switch (pane)
+            {
+                case Pane.A:
+                    return rawImageA;
+                case Pane.B:
+                    return rawImageB;
+                case Pane.C:
+                    return rawImageC;
+                case Pane.D3:
+                    return rawImage3D;
+                default:
+                    return null;
+            }
         }
 
         private RawImage GetSliceRawImage(Pane pane)
@@ -1533,11 +1568,6 @@ namespace SimpleITKUnity
 
         private void HandleInput()
         {
-            if (HandleTouchInput())
-            {
-                HandleVolumeResetInput();
-                return;
-            }
 
             if (!useUiRoiHandles)
             {
@@ -1594,8 +1624,6 @@ namespace SimpleITKUnity
             //         AdjustPosition(pane, drag * moveStep * 0.5f);
             //     }
             // }
-
-            HandleVolumeResetInput();
         }
 
         private bool HandleTouchInput()
@@ -1924,61 +1952,6 @@ namespace SimpleITKUnity
             _initialVolumeTransformCaptured = true;
         }
 
-        private void HandleVolumeResetInput()
-        {
-            if (!Input.GetKeyDown(volumeResetKey))
-            {
-                return;
-            }
-
-            ResetVolumeToInitial();
-        }
-
-        private void ResetVolumeToInitial()
-        {
-            if (!_initialVolumeTransformCaptured)
-            {
-                return;
-            }
-
-            // Restore the volume transform.
-            if (targetRenderer != null)
-            {
-                targetRenderer.transform.localRotation = _initialVolumeLocalRotation;
-                targetRenderer.transform.localScale    = _initialVolumeLocalScale;
-            }
-
-            // Restore the ROI.
-            roiStart01 = _initialRoiStart;
-            roiEnd01   = _initialRoiEnd;
-            MarkApplyDirty(MprApplyDirty.Roi);
-
-            // Restore zoom.
-            globalZoom = _initialGlobalZoom;
-            MarkApplyDirty(MprApplyDirty.CameraPoses);
-
-            // Restore slice positions.
-            sliceX = _initialSliceX;
-            sliceY = _initialSliceY;
-            sliceZ = _initialSliceZ;
-            SyncSliceSlidersFromFields();
-            MarkApplyDirty(MprApplyDirty.PlaneTransforms | MprApplyDirty.CameraPoses);
-        }
-
-        private void SetupSliceSliderUi()
-        {
-            BindSliceSlider(sliceSliderX, sliceX, OnSliceSliderXChanged);
-            BindSliceSlider(sliceSliderY, sliceY, OnSliceSliderYChanged);
-            BindSliceSlider(sliceSliderZ, sliceZ, OnSliceSliderZChanged);
-        }
-
-        private void TeardownSliceSliderUi()
-        {
-            UnbindSliceSlider(sliceSliderX, OnSliceSliderXChanged);
-            UnbindSliceSlider(sliceSliderY, OnSliceSliderYChanged);
-            UnbindSliceSlider(sliceSliderZ, OnSliceSliderZChanged);
-        }
-
         private static float SliceToSliderValue(float slice) => 1f - Mathf.Clamp01(slice);
 
         private static float SliderToSliceValue(float slider) => 1f - Mathf.Clamp01(slider);
@@ -2005,25 +1978,6 @@ namespace SimpleITKUnity
             }
 
             slider.onValueChanged.RemoveListener(onChanged);
-        }
-
-        private void SyncSliceSlidersFromFields()
-        {
-            SyncSliceSlider(sliceSliderX, sliceX);
-            SyncSliceSlider(sliceSliderY, sliceY);
-            SyncSliceSlider(sliceSliderZ, sliceZ);
-        }
-
-        private void SyncSliceSlider(Slider slider, float value)
-        {
-            if (slider == null)
-            {
-                return;
-            }
-
-            slider.minValue = 0f;
-            slider.maxValue = 1f;
-            slider.SetValueWithoutNotify(SliceToSliderValue(value));
         }
 
         private void OnSliceSliderXChanged(float value)
@@ -2075,27 +2029,6 @@ namespace SimpleITKUnity
             }
 
             MarkApplyDirty(MprApplyDirty.PlaneTransforms | MprApplyDirty.CameraPoses);
-        }
-
-        private void SetupResetButtonUi()
-        {
-            if (resetButton == null)
-            {
-                return;
-            }
-
-            resetButton.onClick.RemoveListener(ResetVolumeToInitial);
-            resetButton.onClick.AddListener(ResetVolumeToInitial);
-        }
-
-        private void TeardownResetButtonUi()
-        {
-            if (resetButton == null)
-            {
-                return;
-            }
-
-            resetButton.onClick.RemoveListener(ResetVolumeToInitial);
         }
 
         private static Vector2 ToGuiPosition(Vector2 screenPosition)
@@ -2650,6 +2583,8 @@ namespace SimpleITKUnity
                     return _sliceRenderTextureB;
                 case Pane.C:
                     return _sliceRenderTextureC;
+                case Pane.D3:
+                    return _renderTexture3D;
                 default:
                     return null;
             }
@@ -2823,6 +2758,12 @@ namespace SimpleITKUnity
 
             if (pane == Pane.D3)
             {
+                if (rawImage3D != null)
+                {
+                    contentRect = GetAspectFittedContentRectInRawImage(rawImage3D, _renderTexture3D);
+                    return contentRect.width > 1f && contentRect.height > 1f;
+                }
+
                 return false;
             }
 
@@ -2894,7 +2835,7 @@ namespace SimpleITKUnity
                 case Pane.C:
                     return cameraC;
                 case Pane.D3:
-                    return null;
+                    return camera3D;
                 default:
                     return null;
             }
@@ -2917,10 +2858,10 @@ namespace SimpleITKUnity
 
         private Rect GetPaneRect(Pane pane)
         {
-            var sliceRawImage = GetSliceRawImage(pane);
-            if (sliceRawImage != null)
+            var paneRawImage = GetPaneRawImage(pane);
+            if (paneRawImage != null)
             {
-                return GetRawImageScreenRect(sliceRawImage);
+                return GetRawImageScreenRect(paneRawImage);
             }
 
             var cam = GetPaneCamera(pane);
@@ -3007,7 +2948,8 @@ namespace SimpleITKUnity
                     normRect = new Rect(0f, 0f, 0.5f, 0.5f);
                     break;
                 case Pane.D3:
-                    return default;
+                    normRect = new Rect(0.5f, 0f, 0.5f, 0.5f);
+                    break;
                 default:
                     normRect = new Rect(0f, 0f, 1f, 1f);
                     break;
@@ -3209,7 +3151,8 @@ namespace SimpleITKUnity
             var rawImageAActive = rawImageA != null && rawImageA.gameObject.activeInHierarchy;
             var rawImageBActive = rawImageB != null && rawImageB.gameObject.activeInHierarchy;
             var rawImageCActive = rawImageC != null && rawImageC.gameObject.activeInHierarchy;
-            if (rawImageAActive || rawImageBActive || rawImageCActive)
+            var rawImage3DActive = rawImage3D != null && rawImage3D.gameObject.activeInHierarchy;
+            if (rawImageAActive || rawImageBActive || rawImageCActive || rawImage3DActive)
             {
                 var guiPos = ToGuiPosition(screenPosition);
                 if (rawImageAActive && GetRawImageScreenRect(rawImageA).Contains(guiPos))
@@ -3225,6 +3168,11 @@ namespace SimpleITKUnity
                 if (rawImageCActive && GetRawImageScreenRect(rawImageC).Contains(guiPos))
                 {
                     return Pane.C;
+                }
+
+                if (rawImage3DActive && GetRawImageScreenRect(rawImage3D).Contains(guiPos))
+                {
+                    return Pane.D3;
                 }
 
                 return Pane.None;
@@ -3243,6 +3191,11 @@ namespace SimpleITKUnity
             if (nx < 0.5f && ny < 0.5f)
             {
                 return Pane.C;
+            }
+
+            if (nx >= 0.5f && ny < 0.5f)
+            {
+                return Pane.D3;
             }
 
             return Pane.None;
@@ -3266,7 +3219,6 @@ namespace SimpleITKUnity
             }
 
             MarkApplyDirty(MprApplyDirty.PlaneTransforms | MprApplyDirty.CameraPoses);
-            SyncSliceSlidersFromFields();
         }
 
         private void AdjustScale(Pane pane, float delta)
