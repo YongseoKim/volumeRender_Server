@@ -22,9 +22,10 @@ namespace SimpleITKUnity
         private const int SliceLayerB = 27;
         private const int SliceLayerC = 28;
         private const int IndicatorLayer = 29;
-        private const float Initial3DViewYawDegrees = -90f;
-        private const float Initial3DViewPitchDegrees = 60f;
-        private const float Initial3DViewRollDegrees = 90f;
+        private static readonly Vector3 Camera3DWorldDirection = new Vector3(0.551f, 0f, -1.5f);
+        private static readonly Vector3 Camera3DWorldEuler = new Vector3(0f, 335f, 0f);
+        private const float Camera3DDefaultDistance = 1.6f;
+        private const float Camera3DWheelDistanceStep = 0.05f;
         private const float SlicePaneRotationA = -90f;
         private const float SlicePaneRotationB = 180f;
         private const float SlicePaneRotationC = 180f;
@@ -91,11 +92,6 @@ namespace SimpleITKUnity
         [Header("Input")]
         private const bool enableInput = true;
         private const bool requirePlayModeForInput = false;
-        [SerializeField, Range(0.2f, 6f)] private float globalZoom = 1.0f;
-        [SerializeField, Range(0.1f, 2.5f)] private float minGlobalZoom = 0.5f;
-        [SerializeField, Range(0.5f, 8f)] private float maxGlobalZoom = 3.0f;
-        [SerializeField, Range(0.1f, 8f)] private float globalZoomSpeed = 1.8f;
-        [SerializeField, Range(0.05f, 2.5f)] private float mouseWheelZoomSensitivity = 0.35f;
         [SerializeField, Range(0.001f, 0.2f)] private float moveStep = 0.02f;
         [SerializeField, Range(0.01f, 0.5f)] private float scaleStep = 0.06f;
         [SerializeField, Range(0.2f, 3.0f)] private float minScale = 0.2f;
@@ -106,9 +102,10 @@ namespace SimpleITKUnity
         [SerializeField] private Camera cameraB;
         [SerializeField] private Camera cameraC;
         [SerializeField] private Camera camera3D;
-        [SerializeField] private Camera3DProjection camera3DProjection = Camera3DProjection.Orthographic;
-        [SerializeField, Range(20f, 90f)] private float camera3DFov = 50f;
-        [SerializeField, Range(1.2f, 6f)] private float camera3DDistanceFactor = 2.8f;
+        [SerializeField] private float camera3DDistance = Camera3DDefaultDistance;
+        [SerializeField, Range(0.1f, 5f)] private float minCamera3DDistance = 0.5f;
+        [SerializeField, Range(0.5f, 10f)] private float maxCamera3DDistance = 5f;
+        [SerializeField, Range(0.05f, 2f)] private float camera3DDragRotateSensitivity = 0.3f;
 
         [Header("Slice UI Output")]
         [SerializeField] private RawImage rawImageA;
@@ -131,14 +128,22 @@ namespace SimpleITKUnity
         private int _activeRoiTouchFingerId = -1;
         private bool _isTouchPinchZooming;
         private float _touchPinchStartDistance = 1f;
-        private float _touchPinchStartZoom = 1f;
+        private float _touchPinchStartCameraDistance = Camera3DDefaultDistance;
+        private bool _isCamera3DOrbiting;
+        private Vector2 _camera3DOrbitLastMousePosition;
+        private float _camera3DOrbitYaw;
+        private float _camera3DOrbitPitch;
+        private bool _camera3DOrbitInitialized;
+        private bool _camera3DOrbitDragged;
         private bool _runtimeVolumeLoadRequested;
         private Quaternion _initialVolumeLocalRotation;
         private Quaternion _initialVolumeWorldRotation;
         private Vector3    _initialVolumeLocalScale;
         private Vector3    _initialRoiStart;
         private Vector3    _initialRoiEnd;
-        private float      _initialGlobalZoom;
+        private float      _initialCamera3DDistance;
+        private float      _initialCamera3DOrbitYaw;
+        private float      _initialCamera3DOrbitPitch;
         private float      _initialSliceX;
         private float      _initialSliceY;
         private float      _initialSliceZ;
@@ -183,8 +188,6 @@ namespace SimpleITKUnity
         private const string CameraRootName = "Cameras";
         private const string LegacyCameraRootName = "SimpleITK_MPR_Cameras";
         private const string LegacySlicePlaneName = "SimpleITK_SlicePlane";
-        private const KeyCode ZoomInKey = KeyCode.E;
-        private const KeyCode ZoomOutKey = KeyCode.Q;
         private static readonly Rect FullPaneViewportRect = new Rect(0f, 0f, 1f, 1f);
 
         private enum Pane
@@ -201,12 +204,6 @@ namespace SimpleITKUnity
             A,
             B,
             C
-        }
-
-        public enum Camera3DProjection
-        {
-            Orthographic,
-            Perspective
         }
 
         private enum RoiHandle
@@ -256,9 +253,13 @@ namespace SimpleITKUnity
             CaptureInitialVolumeTransformIfNeeded();
             PollDynamicApplyDirtyState();
 
-            var zoomBefore = globalZoom;
+            var camera3DDistanceBefore = camera3DDistance;
+            var camera3DOrbitYawBefore = _camera3DOrbitYaw;
+            var camera3DOrbitPitchBefore = _camera3DOrbitPitch;
             HandleInput();
-            if (!Mathf.Approximately(zoomBefore, globalZoom))
+            if (!Mathf.Approximately(camera3DDistanceBefore, camera3DDistance) ||
+                !Mathf.Approximately(camera3DOrbitYawBefore, _camera3DOrbitYaw) ||
+                !Mathf.Approximately(camera3DOrbitPitchBefore, _camera3DOrbitPitch))
             {
                 MarkApplyDirty(MprApplyDirty.CameraPoses);
             }
@@ -274,6 +275,7 @@ namespace SimpleITKUnity
         /// <summary>Called after volume data is applied so MPR views refresh once.</summary>
         public void NotifyVolumeDataApplied()
         {
+            ResetCamera3DView();
             MarkApplyDirty(MprApplyDirty.All);
         }
 
@@ -354,10 +356,10 @@ namespace SimpleITKUnity
             sliceY = Mathf.Clamp01(sliceY);
             sliceZ = Mathf.Clamp01(sliceZ);
 
-            minGlobalZoom = Mathf.Max(0.1f, minGlobalZoom);
-            maxGlobalZoom = Mathf.Max(minGlobalZoom + 0.01f, maxGlobalZoom);
-            globalZoom = Mathf.Clamp(globalZoom, minGlobalZoom, maxGlobalZoom);
-            mouseWheelZoomSensitivity = Mathf.Clamp(mouseWheelZoomSensitivity, 0.05f, 2.5f);
+            minCamera3DDistance = Mathf.Max(0.1f, minCamera3DDistance);
+            maxCamera3DDistance = Mathf.Max(minCamera3DDistance + 0.01f, maxCamera3DDistance);
+            camera3DDistance = Mathf.Clamp(camera3DDistance, minCamera3DDistance, maxCamera3DDistance);
+            camera3DDragRotateSensitivity = Mathf.Clamp(camera3DDragRotateSensitivity, 0.05f, 2f);
 
             scaleX = Mathf.Clamp(scaleX, minScale, maxScale);
             scaleY = Mathf.Clamp(scaleY, minScale, maxScale);
@@ -1504,37 +1506,84 @@ namespace SimpleITKUnity
                 return;
             }
 
-            var zoom = Mathf.Max(0.1f, globalZoom);
+            Pose3DCamera(camera3D, camera3DDistance);
 
-            // MPR_3D Transform is scene/Inspector-driven; do not overwrite position, rotation, or parent scale here.
-            // if (camera3D != null)
-            // {
-            //     var referenceRotation = GetReferenceVolumeWorldRotation();
-            //     var forwardLocal = GetInitial3DViewForwardLocal();
-            //     var upLocal = GetInitial3DViewUpLocal(forwardLocal);
-            //     var forward = (referenceRotation * forwardLocal).normalized;
-            //     var up = (referenceRotation * upLocal).normalized;
-            //     var direction = -forward;
-            //
-            //     camera3D.transform.position = center + direction * (dist / zoom);
-            //     camera3D.transform.rotation = Quaternion.LookRotation(forward, up);
-            //     camera3D.nearClipPlane = 0.01f;
-            //     camera3D.farClipPlane = Mathf.Max(10f, dist * 8f);
-            //
-            //     if (camera3DProjection == Camera3DProjection.Orthographic)
-            //     {
-            //         camera3D.orthographicSize = Mathf.Max(0.01f, maxExtent / zoom);
-            //     }
-            //     else
-            //     {
-            //         camera3D.fieldOfView = camera3DFov;
-            //     }
-            // }
+            PoseSliceCamera(cameraA, _planeA, 1.0f);
+            PoseSliceCamera(cameraB, _planeB, 1.0f);
+            PoseSliceCamera(cameraC, _planeC, 1.0f);
+        }
 
-            var sliceZoom = Mathf.Min(zoom, 1.0f);
-            PoseSliceCamera(cameraA, _planeA, sliceZoom);
-            PoseSliceCamera(cameraB, _planeB, sliceZoom);
-            PoseSliceCamera(cameraC, _planeC, sliceZoom);
+        private void Pose3DCamera(Camera cam, float distance)
+        {
+            if (cam == null)
+            {
+                return;
+            }
+
+            EnsureCamera3DOrbitInitialized();
+
+            var orbitRotation = GetCamera3DOrbitRotation();
+            cam.transform.rotation = orbitRotation;
+            cam.transform.position = GetCamera3DWorldPosition(distance, orbitRotation);
+
+            cam.nearClipPlane = 0.01f;
+            cam.farClipPlane = Mathf.Max(10f, distance * 8f);
+        }
+
+        private Vector3 GetCamera3DWorldPosition(float distance, Quaternion orbitRotation)
+        {
+            if (!_camera3DOrbitDragged)
+            {
+                return Camera3DWorldDirection * (distance / Camera3DDefaultDistance);
+            }
+
+            return GetCamera3DOrbitPivot() + orbitRotation * (Vector3.back * distance);
+        }
+
+        private static Vector3 GetCamera3DOrbitPivot()
+        {
+            return Vector3.zero;
+        }
+
+        private void EnsureCamera3DOrbitInitialized()
+        {
+            if (_camera3DOrbitInitialized)
+            {
+                return;
+            }
+
+            ResetCamera3DOrbitRotation();
+            _camera3DOrbitInitialized = true;
+        }
+
+        private void ResetCamera3DView()
+        {
+            camera3DDistance = Camera3DDefaultDistance;
+            ResetCamera3DOrbitRotation();
+            _camera3DOrbitInitialized = true;
+            _camera3DOrbitDragged = false;
+            _isCamera3DOrbiting = false;
+        }
+
+        private void ResetCamera3DOrbitRotation()
+        {
+            _camera3DOrbitYaw = Camera3DWorldEuler.y;
+            _camera3DOrbitPitch = Camera3DWorldEuler.x;
+        }
+
+        private Quaternion GetCamera3DOrbitRotation()
+        {
+            return Quaternion.Euler(_camera3DOrbitPitch, _camera3DOrbitYaw, 0f);
+        }
+
+        private void ApplyCamera3DOrbitDelta(Vector2 screenDelta)
+        {
+            EnsureCamera3DOrbitInitialized();
+            _camera3DOrbitDragged = true;
+
+            _camera3DOrbitYaw += screenDelta.x * camera3DDragRotateSensitivity;
+            _camera3DOrbitPitch -= screenDelta.y * camera3DDragRotateSensitivity;
+            _camera3DOrbitPitch = Mathf.Clamp(_camera3DOrbitPitch, -85f, 85f);
         }
 
         private void PoseSliceCamera(Camera cam, MprPlane plane, float zoom)
@@ -1575,14 +1624,19 @@ namespace SimpleITKUnity
             }
 
             var pane = GetMousePane();
-            HandleGlobalZoomInput(pane);
+            HandleCamera3DZoomInput(pane);
+
+            if (_activeRoiHandle == RoiHandle.None)
+            {
+                HandleCamera3DOrbitInput(pane);
+            }
 
             if (_activeRoiHandle != RoiHandle.None)
             {
                 return;
             }
 
-            if (pane == Pane.D3)
+            if (pane == Pane.D3 || _isCamera3DOrbiting)
             {
                 return;
             }
@@ -1724,40 +1778,36 @@ namespace SimpleITKUnity
 
         private bool TryHandleTouchPinchZoomInput()
         {
-            // Pinch zoom on the 3D background (Pane.D3) is disabled.
-            _isTouchPinchZooming = false;
-            return false;
+            if (!TryGetPinchTouches(out var touchA, out var touchB))
+            {
+                _isTouchPinchZooming = false;
+                return false;
+            }
 
-            // if (!TryGetPinchTouches(out var touchA, out var touchB))
-            // {
-            //     _isTouchPinchZooming = false;
-            //     return false;
-            // }
-            //
-            // var midpoint = (touchA.position + touchB.position) * 0.5f;
-            // if (GetPaneFromScreenPosition(midpoint) != Pane.D3)
-            // {
-            //     _isTouchPinchZooming = false;
-            //     return false;
-            // }
-            //
-            // var distance = Vector2.Distance(touchA.position, touchB.position);
-            // if (distance <= 1f)
-            // {
-            //     return true;
-            // }
-            //
-            // if (!_isTouchPinchZooming || touchA.phase == UnityEngine.TouchPhase.Began || touchB.phase == UnityEngine.TouchPhase.Began)
-            // {
-            //     _isTouchPinchZooming = true;
-            //     _touchPinchStartDistance = Mathf.Max(1f, distance);
-            //     _touchPinchStartZoom = globalZoom;
-            //     return true;
-            // }
-            //
-            // var ratio = distance / Mathf.Max(1f, _touchPinchStartDistance);
-            // globalZoom = Mathf.Clamp(_touchPinchStartZoom * ratio, minGlobalZoom, maxGlobalZoom);
-            // return true;
+            var midpoint = (touchA.position + touchB.position) * 0.5f;
+            if (GetPaneFromScreenPosition(midpoint) != Pane.D3)
+            {
+                _isTouchPinchZooming = false;
+                return false;
+            }
+
+            var distance = Vector2.Distance(touchA.position, touchB.position);
+            if (distance <= 1f)
+            {
+                return true;
+            }
+
+            if (!_isTouchPinchZooming || touchA.phase == UnityEngine.TouchPhase.Began || touchB.phase == UnityEngine.TouchPhase.Began)
+            {
+                _isTouchPinchZooming = true;
+                _touchPinchStartDistance = Mathf.Max(1f, distance);
+                _touchPinchStartCameraDistance = camera3DDistance;
+                return true;
+            }
+
+            var ratio = distance / Mathf.Max(1f, _touchPinchStartDistance);
+            camera3DDistance = Mathf.Clamp(_touchPinchStartCameraDistance * ratio, minCamera3DDistance, maxCamera3DDistance);
+            return true;
         }
 
         private bool TryGetPinchTouches(out Touch touchA, out Touch touchB)
@@ -1808,38 +1858,57 @@ namespace SimpleITKUnity
             return false;
         }
 
-        private void HandleGlobalZoomInput(Pane hoveredPane)
+        private void HandleCamera3DZoomInput(Pane hoveredPane)
         {
-            var zoomInput = 0.0f;
-            if (Input.GetKey(ZoomInKey))
-            {
-                zoomInput += 1.0f;
-            }
-            if (Input.GetKey(ZoomOutKey))
-            {
-                zoomInput -= 1.0f;
-            }
-
-            // Scroll wheel over the 3D background must not change globalZoom (no zoom-in/out on camera3D region).
-            // if (hoveredPane == Pane.D3)
-            // {
-            //     var wheel = GetMouseScrollDeltaY();
-            //     if (Mathf.Abs(wheel) > 1e-4f)
-            //     {
-            //         zoomInput += wheel * mouseWheelZoomSensitivity;
-            //     }
-            // }
-
-            if (Mathf.Abs(zoomInput) < 1e-4f)
+            if (hoveredPane != Pane.D3)
             {
                 return;
             }
 
-            var dt = Application.isPlaying
-                ? Time.deltaTime
-                : Mathf.Max(Time.unscaledDeltaTime, 1f / 60f);
-            var factor = Mathf.Exp(zoomInput * globalZoomSpeed * dt);
-            globalZoom = Mathf.Clamp(globalZoom * factor, minGlobalZoom, maxGlobalZoom);
+            var wheel = GetMouseScrollDeltaY();
+            if (Mathf.Abs(wheel) < 1e-4f)
+            {
+                return;
+            }
+
+            camera3DDistance -= wheel * Camera3DWheelDistanceStep;
+            camera3DDistance = Mathf.Clamp(camera3DDistance, minCamera3DDistance, maxCamera3DDistance);
+        }
+
+        private void HandleCamera3DOrbitInput(Pane hoveredPane)
+        {
+            if (Input.GetMouseButtonDown(0))
+            {
+                if (hoveredPane == Pane.D3)
+                {
+                    _isCamera3DOrbiting = true;
+                    _camera3DOrbitLastMousePosition = (Vector2)Input.mousePosition;
+                }
+
+                return;
+            }
+
+            if (Input.GetMouseButtonUp(0))
+            {
+                _isCamera3DOrbiting = false;
+                return;
+            }
+
+            if (!_isCamera3DOrbiting || !Input.GetMouseButton(0))
+            {
+                return;
+            }
+
+            var mousePosition = (Vector2)Input.mousePosition;
+            var delta = mousePosition - _camera3DOrbitLastMousePosition;
+            _camera3DOrbitLastMousePosition = mousePosition;
+
+            if (delta.sqrMagnitude < 1e-6f)
+            {
+                return;
+            }
+
+            ApplyCamera3DOrbitDelta(delta);
         }
 
         private static float GetMouseScrollDeltaY()
@@ -1934,9 +2003,12 @@ namespace SimpleITKUnity
             }
 
             // Capture ROI, zoom, and slice positions even when there is no target renderer.
+            EnsureCamera3DOrbitInitialized();
             _initialRoiStart    = roiStart01;
             _initialRoiEnd      = roiEnd01;
-            _initialGlobalZoom  = globalZoom;
+            _initialCamera3DDistance = camera3DDistance;
+            _initialCamera3DOrbitYaw = _camera3DOrbitYaw;
+            _initialCamera3DOrbitPitch = _camera3DOrbitPitch;
             _initialSliceX      = sliceX;
             _initialSliceY      = sliceY;
             _initialSliceZ      = sliceZ;
@@ -3454,53 +3526,6 @@ namespace SimpleITKUnity
             {
                 SetLayerRecursively(transform.GetChild(i).gameObject, layer);
             }
-        }
-
-        private Quaternion GetReferenceVolumeWorldRotation()
-        {
-            if (_initialVolumeTransformCaptured)
-            {
-                return _initialVolumeWorldRotation;
-            }
-
-            if (targetRenderer != null)
-            {
-                return targetRenderer.transform.rotation;
-            }
-
-            return Quaternion.identity;
-        }
-
-        private Vector3 GetInitial3DViewForwardLocal()
-        {
-            var yawRadians = Initial3DViewYawDegrees * Mathf.Deg2Rad;
-            var pitchRadians = Initial3DViewPitchDegrees * Mathf.Deg2Rad;
-            var cosPitch = Mathf.Cos(pitchRadians);
-            var forward = new Vector3(
-                Mathf.Sin(yawRadians) * cosPitch,
-                -Mathf.Sin(pitchRadians),
-                Mathf.Cos(yawRadians) * cosPitch);
-
-            return forward.sqrMagnitude > 1e-8f ? forward.normalized : Vector3.forward;
-        }
-
-        private Vector3 GetInitial3DViewUpLocal(Vector3 forwardLocal)
-        {
-            var upLocal = Vector3.up;
-            if (Mathf.Abs(Vector3.Dot(forwardLocal, upLocal)) > 0.98f)
-            {
-                upLocal = Vector3.forward;
-            }
-
-            var rightLocal = Vector3.Cross(upLocal, forwardLocal);
-            if (rightLocal.sqrMagnitude <= 1e-8f)
-            {
-                rightLocal = Vector3.right;
-            }
-
-            rightLocal.Normalize();
-            upLocal = Vector3.Cross(forwardLocal, rightLocal).normalized;
-            return (Quaternion.AngleAxis(Initial3DViewRollDegrees, forwardLocal) * upLocal).normalized;
         }
     }
 }
