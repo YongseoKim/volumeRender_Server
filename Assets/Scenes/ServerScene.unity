@@ -977,6 +977,7 @@ GameObject:
   - component: {fileID: 1025781569}
   - component: {fileID: 1025781568}
   - component: {fileID: 1025781570}
+  - component: {fileID: 1025781571}
   m_Layer: 0
   m_Name: Netcode for GameObjects
   m_TagString: Untagged
@@ -1049,7 +1050,7 @@ MonoBehaviour:
     PlayerPrefab: {fileID: 0}
     Prefabs:
       NetworkPrefabsLists:
-      - {fileID: 11400000, guid: 6e5e75b7e3818b6488ca98faabaf542b, type: 2}
+      - {fileID: 11400000, guid: d675276486a9e534783d5d79bf8bb183, type: 2}
     TickRate: 30
     ClientConnectionBufferTimeout: 10
     ConnectionApproval: 0
@@ -1057,7 +1058,7 @@ MonoBehaviour:
     EnableTimeResync: 0
     TimeResyncInterval: 30
     EnsureNetworkVariableLengthSafety: 0
-    EnableSceneManagement: 1
+    EnableSceneManagement: 0
     ForceSamePrefabs: 1
     RecycleNetworkIds: 1
     NetworkIdRecycleDelay: 120
@@ -1067,7 +1068,7 @@ MonoBehaviour:
     EnableNetworkLogs: 1
     NetworkTopology: 0
     UseCMBService: 0
-    AutoSpawnPlayerPrefabClientSide: 1
+    AutoSpawnPlayerPrefabClientSide: 0
     NetworkMessageMetrics: 1
     NetworkProfilingMetrics: 1
     OldPrefabList: []
@@ -1086,6 +1087,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::NetworkButton
   serverButton: {fileID: 2126377086}
+--- !u!114 &1025781571
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1025781566}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7469bb7fe2f1587448a2d09bff1b3ba7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DataNetManager
 --- !u!1 &1042834025
 GameObject:
   m_ObjectHideFlags: 0

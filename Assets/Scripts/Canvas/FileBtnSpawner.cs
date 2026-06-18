@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.Networking;
@@ -34,8 +35,10 @@ namespace SimpleITKUnity
         [SerializeField] private bool buildOnStart = true;
         [SerializeField] private bool loadVolumeOnSelect = true;
         [SerializeField] private SampleFileSelectedEvent onSampleFileSelected;
+        [SerializeField] private DataNetManager dataManager;
 
         private readonly List<FileBtnManager> _spawnedButtons = new();
+        private FileBtnManager _selectedButton;
         private CancellationTokenSource _buildCts;
 
         [Serializable]
@@ -44,6 +47,7 @@ namespace SimpleITKUnity
         private void Awake()
         {
             ResolveVolumeLoader();
+            ResolveDataNetManager();
         }
 
         private void Start()
@@ -120,14 +124,36 @@ namespace SimpleITKUnity
 
         private void HandleFileButtonClicked(FileBtnManager fileBtn)
         {
+            ApplyLocalSelection(fileBtn, broadcastToNetwork: true);
+        }
+
+        private void ApplyLocalSelection(FileBtnManager fileBtn, bool broadcastToNetwork)
+        {
             if (fileBtn == null)
             {
                 return;
             }
 
+            SelectButton(fileBtn);
+
             var sampleFileName = fileBtn.SampleFileName;
             onSampleFileSelected?.Invoke(sampleFileName);
 
+            if (broadcastToNetwork && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+            {
+                var manifestIndex = ResolveManifestIndex(sampleFileName);
+                if (manifestIndex >= 0)
+                {
+                    ResolveDataNetManager();
+                    dataManager?.BroadcastLocalSampleSelection(manifestIndex);
+                }
+            }
+
+            TryLoadSelectedVolume(sampleFileName);
+        }
+
+        private void TryLoadSelectedVolume(string sampleFileName)
+        {
             if (!loadVolumeOnSelect)
             {
                 return;
@@ -143,6 +169,50 @@ namespace SimpleITKUnity
             volumeLoader.LoadSampleFile(sampleFileName);
         }
 
+        /// <summary>
+        /// Triggers the same flow as clicking the file button for a manifest index.
+        /// </summary>
+        public void SelectByManifestIndex(int index)
+        {
+            var fileBtn = FindButtonByManifestIndex(index);
+            if (fileBtn != null)
+            {
+                ApplyLocalSelection(fileBtn, broadcastToNetwork: false);
+                return;
+            }
+
+            var entries = GetSampleEntriesFromManifest();
+            var fileName = index >= 0 && index < entries.Count ? entries[index] : string.Empty;
+            Debug.LogWarning($"FileBtnSpawner: no spawned button found for manifest index {index} ({fileName}).");
+        }
+
+        private FileBtnManager FindButtonByManifestIndex(int index)
+        {
+            var entries = GetSampleEntriesFromManifest();
+            if (index < 0 || index >= entries.Count)
+            {
+                Debug.LogWarning($"FileBtnSpawner: manifest index {index} is out of range.");
+                return null;
+            }
+
+            var fileName = entries[index];
+            for (var i = 0; i < _spawnedButtons.Count; i++)
+            {
+                var fileBtn = _spawnedButtons[i];
+                if (fileBtn == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(fileBtn.SampleFileName, fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return fileBtn;
+                }
+            }
+
+            return null;
+        }
+
         private void ResolveVolumeLoader()
         {
             if (volumeLoader != null)
@@ -153,8 +223,66 @@ namespace SimpleITKUnity
             volumeLoader = FindFirstObjectByType<SimpleITKVolumeLoader>();
         }
 
+        private void ResolveDataNetManager()
+        {
+            if (dataManager != null)
+            {
+                return;
+            }
+
+            dataManager = FindFirstObjectByType<DataNetManager>();
+        }
+
+        private static int ResolveManifestIndex(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return -1;
+            }
+
+            var entries = GetSampleEntriesFromManifest();
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (string.Equals(entries[i], fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void SelectButton(FileBtnManager fileBtn)
+        {
+            if (_selectedButton == fileBtn)
+            {
+                return;
+            }
+
+            if (_selectedButton != null)
+            {
+                _selectedButton.SetSelected(false);
+            }
+
+            _selectedButton = fileBtn;
+            _selectedButton?.SetSelected(true);
+        }
+
+        private void ClearSelection()
+        {
+            if (_selectedButton == null)
+            {
+                return;
+            }
+
+            _selectedButton.SetSelected(false);
+            _selectedButton = null;
+        }
+
         private void ClearSpawnedButtons()
         {
+            ClearSelection();
+
             for (var i = 0; i < _spawnedButtons.Count; i++)
             {
                 if (_spawnedButtons[i] != null)
@@ -219,6 +347,34 @@ namespace SimpleITKUnity
 
             entries.Sort(StringComparer.OrdinalIgnoreCase);
             return entries;
+        }
+
+        /// <summary>
+        /// Loads sample entries from manifest.txt in manifest line order (line index = network index).
+        /// </summary>
+        public static IReadOnlyList<string> GetSampleEntriesFromManifest()
+        {
+            var sampleDirectory = Path.Combine(Application.streamingAssetsPath, "Sample");
+            var manifestCandidates = new[] { "manifest.txt", "files.txt", "_manifest.txt", "__manifest.txt" };
+            for (var i = 0; i < manifestCandidates.Length; i++)
+            {
+                var manifestPath = Path.Combine(sampleDirectory, manifestCandidates[i]);
+                if (!File.Exists(manifestPath))
+                {
+                    continue;
+                }
+
+                var parsed = ParseManifestEntries(File.ReadAllText(manifestPath));
+                if (parsed.Length == 0)
+                {
+                    continue;
+                }
+
+                return FilterSampleEntriesPreservingOrder(parsed);
+            }
+
+            Debug.LogWarning("FileBtnSpawner: manifest not found under StreamingAssets/Sample.");
+            return Array.Empty<string>();
         }
 
         public static async Task<IReadOnlyList<string>> GetSampleEntriesAsync(CancellationToken token = default)
@@ -290,6 +446,24 @@ namespace SimpleITKUnity
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(entry => entry, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+
+            return entries;
+        }
+
+        private static IReadOnlyList<string> FilterSampleEntriesPreservingOrder(IEnumerable<string> rawEntries)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = new List<string>();
+            foreach (var raw in rawEntries)
+            {
+                var entry = NormalizeSampleEntry(raw);
+                if (!IsSelectableSampleEntry(entry) || !seen.Add(entry))
+                {
+                    continue;
+                }
+
+                entries.Add(entry);
+            }
 
             return entries;
         }
