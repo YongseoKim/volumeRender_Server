@@ -17,7 +17,7 @@ namespace SimpleITKUnity
     [ExecuteAlways]
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(-10)]
-    public class SimpleITKOrthogonalViewController : MonoBehaviour
+    public class SimpleITKOrthogonalViewController : MonoBehaviour, IVolumeMarkerProjector
     {
         private const int SliceLayerA = 26;
         private const int SliceLayerB = 27;
@@ -67,6 +67,7 @@ namespace SimpleITKUnity
         [SerializeField] private bool debugPaneClickVolume = false;
         [Header("Pane Line Drag")]
         [SerializeField] private bool enablePaneLineDrag = true;
+        [SerializeField, Range(0.0005f, 0.05f)] private float markerSliceMatchTolerance = 0.002f;
         [SerializeField] private MarkerManager markerManager;
         [Header("ROI (UI Handles)")]
         [Tooltip("If enabled, ROI handle interaction is driven by UI prefabs (EventSystem) instead of OnGUI + Input.mousePosition.")]
@@ -247,6 +248,7 @@ namespace SimpleITKUnity
             _setupDirty = false;
             ApplyAll();
             CaptureInitialVolumeTransformIfNeeded();
+            WireMarkerProjector();
         }
 
         private void Update()
@@ -1112,6 +1114,8 @@ namespace SimpleITKUnity
             {
                 ApplySliceRenderers();
             }
+
+            RefreshVolumeMarkerUiIfNeeded(dirty);
         }
 
         private void ApplySliceRenderers()
@@ -2400,12 +2404,13 @@ namespace SimpleITKUnity
                 return false;
             }
 
-            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out _, out var worldPos))
+            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out var volume01, out var worldPos))
             {
                 return false;
             }
 
-            var rawImage = GetSliceRawImage(ToPane(uiPane));
+            var pane = ToPane(uiPane);
+            var rawImage = GetSliceRawImage(pane);
             if (rawImage == null)
             {
                 return false;
@@ -2417,9 +2422,12 @@ namespace SimpleITKUnity
             ResolveMarkerManagerIfNeeded();
             markerManager?.BeginDragMarkers(
                 rawImage.rectTransform,
-                GetPanePlane(ToPane(uiPane))?.Anchor,
+                GetPanePlane(pane)?.Anchor,
+                ToMarkerPane(pane),
+                GetSliceCoordinateForPane(pane),
                 eventData.pressEventCamera,
                 eventData.position,
+                volume01,
                 worldPos);
 
             return true;
@@ -2440,12 +2448,13 @@ namespace SimpleITKUnity
                 return;
             }
 
-            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out _, out var worldPos))
+            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out var volume01, out var worldPos))
             {
                 return;
             }
 
-            var rawImage = GetSliceRawImage(ToPane(uiPane));
+            var pane = ToPane(uiPane);
+            var rawImage = GetSliceRawImage(pane);
             if (rawImage == null)
             {
                 return;
@@ -2454,9 +2463,12 @@ namespace SimpleITKUnity
             ResolveMarkerManagerIfNeeded();
             markerManager?.UpdateDragMarkers(
                 rawImage.rectTransform,
-                GetPanePlane(ToPane(uiPane))?.Anchor,
+                GetPanePlane(pane)?.Anchor,
+                ToMarkerPane(pane),
+                GetSliceCoordinateForPane(pane),
                 eventData.pressEventCamera,
                 eventData.position,
+                volume01,
                 worldPos);
         }
 
@@ -2705,6 +2717,153 @@ namespace SimpleITKUnity
             {
                 markerManager = FindFirstObjectByType<MarkerManager>();
             }
+        }
+
+        private void WireMarkerProjector()
+        {
+            if (!Application.isPlaying)
+            {
+                return;
+            }
+
+            ResolveMarkerManagerIfNeeded();
+            markerManager?.SetProjector(this);
+        }
+
+        private void RefreshVolumeMarkerUiIfNeeded(MprApplyDirty dirty)
+        {
+            if (!Application.isPlaying)
+            {
+                return;
+            }
+
+            if ((dirty & (MprApplyDirty.PlaneTransforms | MprApplyDirty.CameraPoses | MprApplyDirty.CameraLayout)) == 0)
+            {
+                return;
+            }
+
+            ResolveMarkerManagerIfNeeded();
+            markerManager?.RefreshMarkerUi();
+        }
+
+        bool IVolumeMarkerProjector.IsMarkerVisibleOnCurrentSlice(MarkerPane pane, float drawnSliceCoordinate)
+        {
+            return IsMarkerVisibleOnCurrentSlice(pane, drawnSliceCoordinate);
+        }
+
+        bool IVolumeMarkerProjector.TryProjectVolume01ToRawImageLocal(
+            MarkerPane pane,
+            Vector3 volume01,
+            out Vector2 rawImageLocal)
+        {
+            return TryProjectVolume01ToRawImageLocal(pane, volume01, out rawImageLocal);
+        }
+
+        private bool IsMarkerVisibleOnCurrentSlice(MarkerPane pane, float drawnSliceCoordinate)
+        {
+            var currentSlice = GetSliceCoordinateForMarkerPane(pane);
+            return Mathf.Abs(currentSlice - drawnSliceCoordinate) <= markerSliceMatchTolerance;
+        }
+
+        private bool TryProjectVolume01ToRawImageLocal(
+            MarkerPane markerPane,
+            Vector3 volume01,
+            out Vector2 rawImageLocal)
+        {
+            rawImageLocal = default;
+
+            var pane = ToInternalPane(markerPane);
+            var rawImage = GetSliceRawImage(pane);
+            if (rawImage == null)
+            {
+                return false;
+            }
+
+            var paneUv = Volume01ToPaneUv(pane, volume01);
+            return TryPaneUvToRawImageLocal(pane, rawImage, paneUv.x, paneUv.y, out rawImageLocal);
+        }
+
+        private static Vector2 Volume01ToPaneUv(Pane pane, Vector3 volume01)
+        {
+            switch (pane)
+            {
+                case Pane.A:
+                    return new Vector2(1f - volume01.z, volume01.y);
+                case Pane.B:
+                    return new Vector2(volume01.x, 1f - volume01.z);
+                case Pane.C:
+                    return new Vector2(volume01.x, volume01.y);
+                default:
+                    return Vector2.zero;
+            }
+        }
+
+        private bool TryPaneUvToRawImageLocal(
+            Pane pane,
+            RawImage rawImage,
+            float u,
+            float v,
+            out Vector2 localPoint)
+        {
+            localPoint = default;
+
+            if (rawImage == null || !TryGetRawImageContentRectLocal(pane, rawImage, out var contentLocalRect))
+            {
+                return false;
+            }
+
+            u = Mathf.Clamp01(u);
+            v = Mathf.Clamp01(v);
+            localPoint = new Vector2(
+                contentLocalRect.xMin + u * contentLocalRect.width,
+                contentLocalRect.yMin + v * contentLocalRect.height);
+            return true;
+        }
+
+        private static MarkerPane ToMarkerPane(Pane pane)
+        {
+            switch (pane)
+            {
+                case Pane.A:
+                    return MarkerPane.A;
+                case Pane.B:
+                    return MarkerPane.B;
+                default:
+                    return MarkerPane.C;
+            }
+        }
+
+        private static Pane ToInternalPane(MarkerPane pane)
+        {
+            switch (pane)
+            {
+                case MarkerPane.A:
+                    return Pane.A;
+                case MarkerPane.B:
+                    return Pane.B;
+                default:
+                    return Pane.C;
+            }
+        }
+
+        private float GetSliceCoordinateForPane(Pane pane)
+        {
+            switch (pane)
+            {
+                case Pane.A:
+                    return sliceX;
+                case Pane.B:
+                    return sliceY;
+                case Pane.C:
+                    return sliceZ;
+                default:
+                    return 0.5f;
+            }
+        }
+
+        private float GetSliceCoordinateForMarkerPane(MarkerPane pane)
+        {
+            return GetSliceCoordinateForPane(ToInternalPane(pane));
         }
 
         private void LogPaneDragVolumeFromPaneUv(UiPane uiPane, Pane pane, Vector2 paneUv)

@@ -26,20 +26,35 @@ public class MarkerManager : MonoBehaviour
 
     private sealed class ActiveDragTrail
     {
+        public MarkerPane Pane;
+        public float DrawnSliceCoordinate;
         public UILineGraphic UiLine;
         public LineRenderer VolumeLine;
         public readonly List<Vector2> UiPoints = new List<Vector2>();
+        public readonly List<Vector3> VolumePoints01 = new List<Vector3>();
         public readonly List<Vector3> VolumePoints = new List<Vector3>();
         public Vector2 LastScreenPosition;
         public bool HasLastScreenPosition;
     }
 
+    private sealed class CompletedPaneMarker
+    {
+        public MarkerPane Pane;
+        public float DrawnSliceCoordinate;
+        public RectTransform RawImage;
+        public UILineGraphic UiLine;
+        public LineRenderer VolumeLine;
+        public readonly List<Vector3> VolumePoints01 = new List<Vector3>();
+    }
+
     private readonly List<GameObject> _spawnedLineObjects = new List<GameObject>();
     private readonly Dictionary<RectTransform, ActiveDragTrail> _activeDragTrails =
         new Dictionary<RectTransform, ActiveDragTrail>();
+    private readonly List<CompletedPaneMarker> _completedMarkers = new List<CompletedPaneMarker>();
 
     private Material _volumeLineMaterial;
     private Material _uiLineMaterial;
+    private IVolumeMarkerProjector _projector;
 
     private void Awake()
     {
@@ -57,11 +72,20 @@ public class MarkerManager : MonoBehaviour
         ClearMarkers();
     }
 
+    public void SetProjector(IVolumeMarkerProjector projector)
+    {
+        _projector = projector;
+        RefreshMarkerUi();
+    }
+
     public void BeginDragMarkers(
         RectTransform rawImage,
         Transform volumeLineAnchor,
+        MarkerPane pane,
+        float drawnSliceCoordinate,
         Camera eventCamera,
         Vector2 screenPosition,
+        Vector3 volume01,
         Vector3 volumeWorldPosition)
     {
         if (!showPaneLineVisuals || !CanDrawLines(rawImage))
@@ -70,8 +94,8 @@ public class MarkerManager : MonoBehaviour
         }
 
         ClearPaneTrail(rawImage);
-        var trail = GetOrCreateActiveDragTrail(rawImage, volumeLineAnchor);
-        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volumeWorldPosition);
+        var trail = GetOrCreateActiveDragTrail(rawImage, volumeLineAnchor, pane, drawnSliceCoordinate);
+        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volume01, volumeWorldPosition);
         trail.LastScreenPosition = screenPosition;
         trail.HasLastScreenPosition = true;
     }
@@ -79,8 +103,11 @@ public class MarkerManager : MonoBehaviour
     public void UpdateDragMarkers(
         RectTransform rawImage,
         Transform volumeLineAnchor,
+        MarkerPane pane,
+        float drawnSliceCoordinate,
         Camera eventCamera,
         Vector2 screenPosition,
+        Vector3 volume01,
         Vector3 volumeWorldPosition)
     {
         if (!showPaneLineVisuals || !CanDrawLines(rawImage))
@@ -90,7 +117,15 @@ public class MarkerManager : MonoBehaviour
 
         if (!_activeDragTrails.TryGetValue(rawImage, out var trail))
         {
-            BeginDragMarkers(rawImage, volumeLineAnchor, eventCamera, screenPosition, volumeWorldPosition);
+            BeginDragMarkers(
+                rawImage,
+                volumeLineAnchor,
+                pane,
+                drawnSliceCoordinate,
+                eventCamera,
+                screenPosition,
+                volume01,
+                volumeWorldPosition);
             return;
         }
 
@@ -101,7 +136,7 @@ public class MarkerManager : MonoBehaviour
         }
 
         EnsureTrailRenderers(trail, rawImage, volumeLineAnchor);
-        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volumeWorldPosition);
+        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volume01, volumeWorldPosition);
         trail.LastScreenPosition = screenPosition;
         trail.HasLastScreenPosition = true;
     }
@@ -113,12 +148,36 @@ public class MarkerManager : MonoBehaviour
             return;
         }
 
+        if (_activeDragTrails.TryGetValue(rawImage, out var trail))
+        {
+            FinalizeTrail(trail, rawImage);
+        }
+
         _activeDragTrails.Remove(rawImage);
+    }
+
+    public void RefreshMarkerUi()
+    {
+        if (!showPaneLineVisuals)
+        {
+            return;
+        }
+
+        for (var i = 0; i < _completedMarkers.Count; ++i)
+        {
+            RefreshCompletedMarker(_completedMarkers[i]);
+        }
+
+        foreach (var pair in _activeDragTrails)
+        {
+            RefreshActiveTrail(pair.Value, pair.Key);
+        }
     }
 
     public void ClearMarkers()
     {
         _activeDragTrails.Clear();
+        _completedMarkers.Clear();
 
         for (var i = _spawnedLineObjects.Count - 1; i >= 0; --i)
         {
@@ -141,6 +200,87 @@ public class MarkerManager : MonoBehaviour
         _spawnedLineObjects.Clear();
     }
 
+    private void FinalizeTrail(ActiveDragTrail trail, RectTransform rawImage)
+    {
+        if (trail == null || rawImage == null || trail.VolumePoints01.Count == 0)
+        {
+            return;
+        }
+
+        var marker = new CompletedPaneMarker
+        {
+            Pane = trail.Pane,
+            DrawnSliceCoordinate = trail.DrawnSliceCoordinate,
+            RawImage = rawImage,
+            UiLine = trail.UiLine,
+            VolumeLine = trail.VolumeLine
+        };
+        marker.VolumePoints01.AddRange(trail.VolumePoints01);
+
+        _completedMarkers.Add(marker);
+        RefreshCompletedMarker(marker);
+    }
+
+    private void RefreshCompletedMarker(CompletedPaneMarker marker)
+    {
+        if (marker?.UiLine == null)
+        {
+            return;
+        }
+
+        ApplyProjectedUiPoints(marker.UiLine, marker.Pane, marker.DrawnSliceCoordinate, marker.VolumePoints01);
+    }
+
+    private void RefreshActiveTrail(ActiveDragTrail trail, RectTransform rawImage)
+    {
+        if (trail?.UiLine == null)
+        {
+            return;
+        }
+
+        ApplyProjectedUiPoints(trail.UiLine, trail.Pane, trail.DrawnSliceCoordinate, trail.VolumePoints01);
+    }
+
+    private void ApplyProjectedUiPoints(
+        UILineGraphic uiLine,
+        MarkerPane pane,
+        float drawnSliceCoordinate,
+        IReadOnlyList<Vector3> volumePoints01)
+    {
+        if (uiLine == null)
+        {
+            return;
+        }
+
+        if (_projector == null ||
+            !_projector.IsMarkerVisibleOnCurrentSlice(pane, drawnSliceCoordinate))
+        {
+            uiLine.gameObject.SetActive(false);
+            uiLine.ClearPoints();
+            return;
+        }
+
+        uiLine.gameObject.SetActive(true);
+
+        var projectedPoints = new List<Vector2>(volumePoints01.Count);
+        for (var i = 0; i < volumePoints01.Count; ++i)
+        {
+            if (_projector.TryProjectVolume01ToRawImageLocal(pane, volumePoints01[i], out var localPoint))
+            {
+                projectedPoints.Add(localPoint);
+            }
+        }
+
+        if (projectedPoints.Count >= 2)
+        {
+            uiLine.SetPoints(projectedPoints);
+        }
+        else
+        {
+            uiLine.ClearPoints();
+        }
+    }
+
     private PaneLineStyle CreatePaneLineStyle()
     {
         return new PaneLineStyle
@@ -158,12 +298,25 @@ public class MarkerManager : MonoBehaviour
         return rawImage != null;
     }
 
-    private ActiveDragTrail GetOrCreateActiveDragTrail(RectTransform rawImage, Transform volumeLineAnchor)
+    private ActiveDragTrail GetOrCreateActiveDragTrail(
+        RectTransform rawImage,
+        Transform volumeLineAnchor,
+        MarkerPane pane,
+        float drawnSliceCoordinate)
     {
         if (!_activeDragTrails.TryGetValue(rawImage, out var trail))
         {
-            trail = new ActiveDragTrail();
+            trail = new ActiveDragTrail
+            {
+                Pane = pane,
+                DrawnSliceCoordinate = drawnSliceCoordinate
+            };
             _activeDragTrails[rawImage] = trail;
+        }
+        else
+        {
+            trail.Pane = pane;
+            trail.DrawnSliceCoordinate = drawnSliceCoordinate;
         }
 
         EnsureTrailRenderers(trail, rawImage, volumeLineAnchor);
@@ -206,30 +359,48 @@ public class MarkerManager : MonoBehaviour
         RectTransform rawImage,
         Camera eventCamera,
         Vector2 screenPosition,
+        Vector3 volume01,
         Vector3 volumeWorldPosition)
     {
-        var camera = ResolveEventCamera(rawImage, eventCamera);
-        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                rawImage,
-                screenPosition,
-                camera,
-                out var localPoint))
+        if (trail.VolumePoints01.Count == 0 ||
+            Vector3.Distance(trail.VolumePoints01[trail.VolumePoints01.Count - 1], volume01) > 1e-5f)
         {
-            localPoint = new Vector2(localPoint.x, localPoint.y);
-            if (trail.UiPoints.Count == 0 || Vector2.Distance(trail.UiPoints[trail.UiPoints.Count - 1], localPoint) > 0.01f)
+            trail.VolumePoints01.Add(volume01);
+        }
+
+        Vector2 localPoint = default;
+        var hasProjectedPoint = _projector != null &&
+            _projector.TryProjectVolume01ToRawImageLocal(trail.Pane, volume01, out localPoint);
+
+        if (!hasProjectedPoint)
+        {
+            var camera = ResolveEventCamera(rawImage, eventCamera);
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                    rawImage,
+                    screenPosition,
+                    camera,
+                    out localPoint))
             {
-                trail.UiPoints.Add(localPoint);
-                if (trail.UiLine != null)
-                {
-                    trail.UiLine.AddPoint(localPoint);
-                }
+                hasProjectedPoint = true;
+            }
+            else if (logPlacementFailures)
+            {
+                Debug.LogWarning(
+                    $"[MarkerManager] Failed to convert screen point {screenPosition} to RawImage local space. camera={(camera != null ? camera.name : "null")}",
+                    this);
             }
         }
-        else if (logPlacementFailures)
+
+        if (hasProjectedPoint &&
+            (trail.UiPoints.Count == 0 ||
+             Vector2.Distance(trail.UiPoints[trail.UiPoints.Count - 1], localPoint) > 0.01f))
         {
-            Debug.LogWarning(
-                $"[MarkerManager] Failed to convert screen point {screenPosition} to RawImage local space. camera={(camera != null ? camera.name : "null")}",
-                this);
+            trail.UiPoints.Add(localPoint);
+            if (trail.UiLine != null)
+            {
+                trail.UiLine.gameObject.SetActive(true);
+                trail.UiLine.AddPoint(localPoint);
+            }
         }
 
         if (trail.VolumeLine != null)
@@ -476,6 +647,7 @@ public class MarkerManager : MonoBehaviour
         trail.UiLine = null;
         trail.VolumeLine = null;
         trail.UiPoints.Clear();
+        trail.VolumePoints01.Clear();
         trail.VolumePoints.Clear();
         trail.HasLastScreenPosition = false;
     }
