@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.EventSystems;
 using UnityEngine.Serialization;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
@@ -62,6 +63,11 @@ namespace SimpleITKUnity
         [SerializeField, Range(1f, 12f)] private float roiLineThicknessPixels = 6f;
         [Tooltip("Play mode: draws grab zones, content rect, RawImage bounds, and mouse hit-test position.")]
         [SerializeField] private bool debugRoiHitAreas = false;
+        [Tooltip("Play mode: logs pane UV, normalized volume01, and world position while a slice pane is dragged.")]
+        [SerializeField] private bool debugPaneClickVolume = false;
+        [Header("Pane Line Drag")]
+        [SerializeField] private bool enablePaneLineDrag = true;
+        [SerializeField] private MarkerManager markerManager;
         [Header("ROI (UI Handles)")]
         [Tooltip("If enabled, ROI handle interaction is driven by UI prefabs (EventSystem) instead of OnGUI + Input.mousePosition.")]
         [SerializeField] private bool useUiRoiHandles = false;
@@ -126,6 +132,9 @@ namespace SimpleITKUnity
         private RoiHandle _activeRoiHandle = RoiHandle.None;
         private bool _isRoiTouchDragging;
         private int _activeRoiTouchFingerId = -1;
+        private bool _isPaneDragDebugActive;
+        private bool _isPaneLineDragActive;
+        private UiPane _activePaneLineDragUiPane;
         private bool _isTouchPinchZooming;
         private float _touchPinchStartDistance = 1f;
         private float _touchPinchStartCameraDistance = Camera3DDefaultDistance;
@@ -2209,6 +2218,27 @@ namespace SimpleITKUnity
             Gizmos.color = previousColor;
         }
 
+        private bool IsPointerOverRoiHandle(Pane pane, Rect paneRect, Vector2 mousePos)
+        {
+            var unrotatedMousePos = InverseRotateGuiPointAroundPivot(
+                mousePos,
+                paneRect.center,
+                GetSliceViewRotationZ(pane));
+
+            if (!paneRect.Contains(unrotatedMousePos))
+            {
+                return false;
+            }
+
+            var startPoint = GetRoiHandleScreenPoint(paneRect, pane, RoiHandle.Start);
+            var endPoint = GetRoiHandleScreenPoint(paneRect, pane, RoiHandle.End);
+            var grabHalf = GetRoiGrabHalf(pane, paneRect);
+
+            var distStart = ChebyshevDistance(unrotatedMousePos, startPoint);
+            var distEnd = ChebyshevDistance(unrotatedMousePos, endPoint);
+            return distStart <= grabHalf || distEnd <= grabHalf;
+        }
+
         private bool TryBeginRoiDrag(Pane pane, Rect paneRect, Vector2 mousePos)
         {
             if (!paneRect.Contains(mousePos))
@@ -2240,8 +2270,6 @@ namespace SimpleITKUnity
 
             return false;
         }
-
-
 
         private void DrawRoiPaneOverlay(Pane pane, Rect contentRect, bool drawHandles)
         {
@@ -2314,6 +2342,708 @@ namespace SimpleITKUnity
                 default:
                     return roiOverlayC;
             }
+        }
+
+        public void SetRoiCornerFromVolume01(bool isStartCorner, Vector3 volume01)
+        {
+            if (!enableRoiBox)
+            {
+                return;
+            }
+
+            volume01 = Clamp01Vector(volume01);
+            if (isStartCorner)
+            {
+                roiStart01 = volume01;
+            }
+            else
+            {
+                roiEnd01 = volume01;
+            }
+
+            MarkApplyDirty(MprApplyDirty.Roi);
+        }
+
+        /// <summary>
+        /// Resolves a pane drag position to pane UV, normalized volume01, and world position.
+        /// </summary>
+        public bool TryGetPaneDragVolume(
+            UiPane uiPane,
+            Vector2 screenPosition,
+            out Vector2 paneUv,
+            out Vector3 volume01,
+            out Vector3 worldPos)
+        {
+            return TryResolvePaneDragVolume(ToPane(uiPane), screenPosition, out paneUv, out volume01, out worldPos);
+        }
+
+        /// <summary>
+        /// Resolves a pane click position to pane UV, normalized volume01, and world position.
+        /// </summary>
+        public bool TryGetPaneClickVolume(
+            UiPane uiPane,
+            Vector2 screenPosition,
+            out Vector2 paneUv,
+            out Vector3 volume01,
+            out Vector3 worldPos)
+        {
+            return TryGetPaneDragVolume(uiPane, screenPosition, out paneUv, out volume01, out worldPos);
+        }
+
+        /// <summary>
+        /// Begins a pane line drag from a UI pointer down event. Returns true when the drag session starts.
+        /// </summary>
+        public bool TryBeginPaneLineDrag(UiPane uiPane, PointerEventData eventData)
+        {
+            if (!enablePaneLineDrag || !Application.isPlaying || eventData == null)
+            {
+                return false;
+            }
+
+            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out _, out var worldPos))
+            {
+                return false;
+            }
+
+            var rawImage = GetSliceRawImage(ToPane(uiPane));
+            if (rawImage == null)
+            {
+                return false;
+            }
+
+            _isPaneLineDragActive = true;
+            _activePaneLineDragUiPane = uiPane;
+
+            ResolveMarkerManagerIfNeeded();
+            markerManager?.BeginDragMarkers(
+                rawImage.rectTransform,
+                GetPanePlane(ToPane(uiPane))?.Anchor,
+                eventData.pressEventCamera,
+                eventData.position,
+                worldPos);
+
+            return true;
+        }
+
+        /// <summary>
+        /// Updates the active pane line drag from a UI drag event.
+        /// </summary>
+        public void UpdatePaneLineDrag(UiPane uiPane, PointerEventData eventData)
+        {
+            if (!_isPaneLineDragActive || eventData == null || uiPane != _activePaneLineDragUiPane)
+            {
+                return;
+            }
+
+            if (!enablePaneLineDrag)
+            {
+                return;
+            }
+
+            if (!TryGetPaneClickVolume(uiPane, eventData.position, out _, out _, out var worldPos))
+            {
+                return;
+            }
+
+            var rawImage = GetSliceRawImage(ToPane(uiPane));
+            if (rawImage == null)
+            {
+                return;
+            }
+
+            ResolveMarkerManagerIfNeeded();
+            markerManager?.UpdateDragMarkers(
+                rawImage.rectTransform,
+                GetPanePlane(ToPane(uiPane))?.Anchor,
+                eventData.pressEventCamera,
+                eventData.position,
+                worldPos);
+        }
+
+        /// <summary>Ends the active pane line drag from a UI pointer up event.</summary>
+        public void EndPaneLineDrag(UiPane uiPane, PointerEventData eventData)
+        {
+            if (!_isPaneLineDragActive || uiPane != _activePaneLineDragUiPane)
+            {
+                return;
+            }
+
+            ClearPaneLineDragState();
+        }
+
+        /// <summary>
+        /// Logs pane UV, normalized volume01, and world position for a screen-space pointer drag.
+        /// Wire from VR pointer drag events, or rely on <see cref="HandlePaneDragDebugInput"/>.
+        /// </summary>
+        public void DebugLogPaneDragFromScreen(UiPane uiPane, Vector2 screenPosition)
+        {
+            if (!debugPaneClickVolume)
+            {
+                return;
+            }
+
+            var pane = ToPane(uiPane);
+            if (!TryResolvePaneDragVolume(pane, screenPosition, out var paneUv, out var volume01, out var worldPos))
+            {
+                Debug.LogWarning(
+                    $"[MPR Pane Drag] {uiPane}: could not resolve volume at screen {screenPosition}.",
+                    this);
+                return;
+            }
+
+            LogPaneDragVolume(uiPane, pane, paneUv, volume01, worldPos);
+        }
+
+        /// <summary>PointerEventData wrapper for Pointable Canvas / VR pointer drag events.</summary>
+        public void DebugLogPaneDragFromPointer(UiPane uiPane, PointerEventData eventData)
+        {
+            if (!debugPaneClickVolume || eventData == null)
+            {
+                return;
+            }
+
+            DebugLogPaneDragFromScreen(uiPane, eventData.position);
+        }
+
+        /// <summary>Logs pane UV, normalized volume01, and world position for a single UI pointer click.</summary>
+        public void DebugLogPaneClickFromPointer(UiPane uiPane, PointerEventData eventData)
+        {
+            if (!debugPaneClickVolume || eventData == null)
+            {
+                return;
+            }
+
+            DebugLogPaneClickFromScreen(uiPane, eventData.position);
+        }
+
+        public void DebugLogPaneClickFromScreen(UiPane uiPane, Vector2 screenPosition)
+        {
+            if (!debugPaneClickVolume)
+            {
+                return;
+            }
+
+            var pane = ToPane(uiPane);
+            if (!TryResolvePaneDragVolume(pane, screenPosition, out var paneUv, out var volume01, out var worldPos))
+            {
+                Debug.LogWarning(
+                    $"[MPR Pane Click] {uiPane}: could not resolve volume at screen {screenPosition}.",
+                    this);
+                return;
+            }
+
+            LogPaneClickVolume(uiPane, pane, paneUv, volume01, worldPos);
+        }
+
+        /// <summary>Overlay-local 0..1 coordinates, matching <see cref="SetRoiHandleFromUi"/>.</summary>
+        public void DebugLogPaneDragFromUi(UiPane uiPane, float overlayU, float overlayV)
+        {
+            if (!debugPaneClickVolume)
+            {
+                return;
+            }
+
+            var pane = ToPane(uiPane);
+            var overlay = GetRoiOverlay(uiPane);
+            if (TryOverlayUvToContentUv(pane, overlay, overlayU, overlayV, out var contentU, out var contentV))
+            {
+                LogPaneDragVolumeFromPaneUv(uiPane, pane, new Vector2(contentU, contentV));
+                return;
+            }
+
+            LogPaneDragVolumeFromPaneUv(uiPane, pane, new Vector2(overlayU, overlayV));
+        }
+
+        private static bool TryGetPaneDragScreenPosition(
+            out Vector2 screenPosition,
+            out bool dragBegan,
+            out bool dragEnded)
+        {
+            screenPosition = default;
+            dragBegan = false;
+            dragEnded = false;
+
+            if (Input.touchSupported && Input.touchCount > 0)
+            {
+                for (var i = 0; i < Input.touchCount; i++)
+                {
+                    var touch = Input.GetTouch(i);
+                    screenPosition = touch.position;
+
+                    if (touch.phase == UnityEngine.TouchPhase.Began)
+                    {
+                        dragBegan = true;
+                        return true;
+                    }
+
+                    if (touch.phase == UnityEngine.TouchPhase.Moved ||
+                        touch.phase == UnityEngine.TouchPhase.Stationary)
+                    {
+                        return true;
+                    }
+
+                    if (touch.phase == UnityEngine.TouchPhase.Ended ||
+                        touch.phase == UnityEngine.TouchPhase.Canceled)
+                    {
+                        dragEnded = true;
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            screenPosition = Input.mousePosition;
+
+            if (Input.GetMouseButtonDown(0))
+            {
+                dragBegan = true;
+                return true;
+            }
+
+            if (Input.GetMouseButton(0))
+            {
+                return true;
+            }
+
+            if (Input.GetMouseButtonUp(0))
+            {
+                dragEnded = true;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void HandlePaneDragDebugInput()
+        {
+            if (!debugPaneClickVolume || !Application.isPlaying)
+            {
+                return;
+            }
+
+            if (_isRoiTouchDragging || _activeRoiHandle != RoiHandle.None)
+            {
+                ClearPaneDragDebugState();
+                return;
+            }
+
+            if (!TryGetPaneDragScreenPosition(out var screenPosition, out var dragBegan, out var dragEnded))
+            {
+                ClearPaneDragDebugState();
+                return;
+            }
+
+            if (dragEnded)
+            {
+                ClearPaneDragDebugState();
+                return;
+            }
+
+            var pane = GetPaneFromScreenPosition(screenPosition);
+            if (pane != Pane.A && pane != Pane.B && pane != Pane.C)
+            {
+                if (dragBegan)
+                {
+                    ClearPaneDragDebugState();
+                }
+
+                return;
+            }
+
+            if (enableRoiBox && !useUiRoiHandles)
+            {
+                var guiPos = ToGuiPosition(screenPosition);
+                var contentRect = GetRoiDrawingRect(pane);
+                if (IsPointerOverRoiHandle(pane, contentRect, guiPos))
+                {
+                    if (dragBegan)
+                    {
+                        ClearPaneDragDebugState();
+                    }
+
+                    return;
+                }
+            }
+
+            if (dragBegan)
+            {
+                _isPaneDragDebugActive = true;
+            }
+
+            if (!_isPaneDragDebugActive)
+            {
+                return;
+            }
+
+            DebugLogPaneDragFromScreen(ToUiPane(pane), screenPosition);
+        }
+
+        private void ClearPaneDragDebugState()
+        {
+            _isPaneDragDebugActive = false;
+        }
+
+        private void ClearPaneLineDragState()
+        {
+            if (_isPaneLineDragActive)
+            {
+                var rawImage = GetSliceRawImage(ToPane(_activePaneLineDragUiPane));
+                if (rawImage != null)
+                {
+                    ResolveMarkerManagerIfNeeded();
+                    markerManager?.EndDragMarkers(rawImage.rectTransform);
+                }
+            }
+
+            _isPaneLineDragActive = false;
+        }
+
+        private void ResolveMarkerManagerIfNeeded()
+        {
+            if (markerManager == null)
+            {
+                markerManager = FindFirstObjectByType<MarkerManager>();
+            }
+        }
+
+        private void LogPaneDragVolumeFromPaneUv(UiPane uiPane, Pane pane, Vector2 paneUv)
+        {
+            var volume01 = PaneUvToVolume01(pane, paneUv.x, paneUv.y);
+            var worldPos = Volume01ToWorld(volume01);
+            LogPaneDragVolume(uiPane, pane, paneUv, volume01, worldPos);
+        }
+
+        private void LogPaneDragVolume(UiPane uiPane, Pane pane, Vector2 paneUv, Vector3 volume01, Vector3 worldPos)
+        {
+            Debug.Log(
+                $"[MPR Pane Drag] pane={uiPane} paneUv=({paneUv.x:F4}, {paneUv.y:F4}) " +
+                $"volume01=({volume01.x:F4}, {volume01.y:F4}, {volume01.z:F4}) " +
+                $"world=({worldPos.x:F4}, {worldPos.y:F4}, {worldPos.z:F4}) " +
+                $"slice=({sliceX:F4}, {sliceY:F4}, {sliceZ:F4})",
+                this);
+        }
+
+        private void LogPaneClickVolume(UiPane uiPane, Pane pane, Vector2 paneUv, Vector3 volume01, Vector3 worldPos)
+        {
+            Debug.Log(
+                $"[MPR Pane Click] pane={uiPane} paneUv=({paneUv.x:F4}, {paneUv.y:F4}) " +
+                $"volume01=({volume01.x:F4}, {volume01.y:F4}, {volume01.z:F4}) " +
+                $"world=({worldPos.x:F4}, {worldPos.y:F4}, {worldPos.z:F4}) " +
+                $"slice=({sliceX:F4}, {sliceY:F4}, {sliceZ:F4})",
+                this);
+        }
+
+        private bool TryResolvePaneDragVolume(
+            Pane pane,
+            Vector2 screenPosition,
+            out Vector2 paneUv,
+            out Vector3 volume01,
+            out Vector3 worldPos)
+        {
+            paneUv = default;
+            volume01 = default;
+            worldPos = default;
+
+            if (!TryScreenPointToPaneUv(pane, screenPosition, out paneUv))
+            {
+                return false;
+            }
+
+            volume01 = PaneUvToVolume01(pane, paneUv.x, paneUv.y);
+            worldPos = Volume01ToWorld(volume01);
+            return true;
+        }
+
+        private bool TryScreenPointToPaneUv(Pane pane, Vector2 screenPosition, out Vector2 paneUv)
+        {
+            paneUv = default;
+
+            var sliceRawImage = GetSliceRawImage(pane);
+            if (sliceRawImage != null)
+            {
+                if (!IsScreenPointInsideRawImage(sliceRawImage, screenPosition))
+                {
+                    return false;
+                }
+
+                return TryScreenPointToRawImagePaneUv(pane, sliceRawImage, screenPosition, out paneUv);
+            }
+
+            var contentRect = GetRoiDrawingRect(pane);
+            if (contentRect.width <= 1f || contentRect.height <= 1f)
+            {
+                return false;
+            }
+
+            var unrotatedGuiPos = ToUnrotatedPaneGuiPoint(pane, contentRect, screenPosition);
+            if (!contentRect.Contains(unrotatedGuiPos))
+            {
+                return false;
+            }
+
+            paneUv = ScreenToPaneUv(contentRect, unrotatedGuiPos);
+            return true;
+        }
+
+        private bool TryScreenPointToRawImagePaneUv(
+            Pane pane,
+            RawImage rawImage,
+            Vector2 screenPosition,
+            out Vector2 paneUv)
+        {
+            paneUv = default;
+
+            var rectTransform = rawImage.rectTransform;
+            if (rectTransform == null)
+            {
+                return false;
+            }
+
+            var eventCamera = ResolveUiScreenCamera(rectTransform);
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                    rectTransform,
+                    screenPosition,
+                    eventCamera,
+                    out var localPoint))
+            {
+                return false;
+            }
+
+            if (!TryGetRawImageContentRectLocal(pane, rawImage, out var contentLocalRect))
+            {
+                return false;
+            }
+
+            if (!contentLocalRect.Contains(localPoint))
+            {
+                return false;
+            }
+
+            var u = (localPoint.x - contentLocalRect.xMin) / contentLocalRect.width;
+            var v = (localPoint.y - contentLocalRect.yMin) / contentLocalRect.height;
+            paneUv = new Vector2(Mathf.Clamp01(u), Mathf.Clamp01(v));
+            return true;
+        }
+
+        private bool TryGetRawImageContentRectLocal(Pane pane, RawImage rawImage, out Rect contentLocalRect)
+        {
+            contentLocalRect = default;
+
+            var rectTransform = rawImage.rectTransform;
+            if (rectTransform == null)
+            {
+                return false;
+            }
+
+            var localRect = rectTransform.rect;
+            var cam = GetPaneCamera(pane);
+            if (cam != null &&
+                targetRenderer != null &&
+                TryGetRawImageSliceContentRectLocal(pane, rawImage, cam, out contentLocalRect))
+            {
+                return true;
+            }
+
+            contentLocalRect = GetAspectFittedContentRectLocal(localRect, GetSliceRenderTexture(pane));
+            return contentLocalRect.width > 1f && contentLocalRect.height > 1f;
+        }
+
+        private bool TryGetRawImageSliceContentRectLocal(
+            Pane pane,
+            RawImage rawImage,
+            Camera cam,
+            out Rect contentLocalRect)
+        {
+            contentLocalRect = default;
+
+            if (cam == null || targetRenderer == null || rawImage == null)
+            {
+                return false;
+            }
+
+            if (!TryGetSlicePlaneCornerPoints01(pane, sliceX, sliceY, sliceZ, out var c0, out var c1, out var c2, out var c3))
+            {
+                return false;
+            }
+
+            var rectTransform = rawImage.rectTransform;
+            var localRect = rectTransform.rect;
+            var eventCamera = ResolveUiScreenCamera(rectTransform);
+            var t = targetRenderer.transform;
+            var worldCorners = new[]
+            {
+                t.TransformPoint(c0 - Vector3.one * 0.5f),
+                t.TransformPoint(c1 - Vector3.one * 0.5f),
+                t.TransformPoint(c2 - Vector3.one * 0.5f),
+                t.TransformPoint(c3 - Vector3.one * 0.5f),
+            };
+
+            var xMin = float.MaxValue;
+            var yMin = float.MaxValue;
+            var xMax = float.MinValue;
+            var yMax = float.MinValue;
+            var hasVisibleCorner = false;
+
+            foreach (var wp in worldCorners)
+            {
+                var screenPoint = cam.WorldToScreenPoint(wp);
+                if (screenPoint.z <= 0f)
+                {
+                    continue;
+                }
+
+                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                        rectTransform,
+                        screenPoint,
+                        eventCamera,
+                        out var localPoint))
+                {
+                    continue;
+                }
+
+                hasVisibleCorner = true;
+                xMin = Mathf.Min(xMin, localPoint.x);
+                yMin = Mathf.Min(yMin, localPoint.y);
+                xMax = Mathf.Max(xMax, localPoint.x);
+                yMax = Mathf.Max(yMax, localPoint.y);
+            }
+
+            if (!hasVisibleCorner)
+            {
+                contentLocalRect = GetAspectFittedContentRectLocal(localRect, GetSliceRenderTexture(pane));
+                return contentLocalRect.width > 1f && contentLocalRect.height > 1f;
+            }
+
+            contentLocalRect = Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+            contentLocalRect.xMin = Mathf.Max(contentLocalRect.xMin, localRect.xMin);
+            contentLocalRect.yMin = Mathf.Max(contentLocalRect.yMin, localRect.yMin);
+            contentLocalRect.xMax = Mathf.Min(contentLocalRect.xMax, localRect.xMax);
+            contentLocalRect.yMax = Mathf.Min(contentLocalRect.yMax, localRect.yMax);
+            return contentLocalRect.width > 1f && contentLocalRect.height > 1f;
+        }
+
+        private static Rect GetAspectFittedContentRectLocal(Rect localRect, RenderTexture rt)
+        {
+            if (localRect.width <= 1f || localRect.height <= 1f)
+            {
+                return localRect;
+            }
+
+            if (rt == null || rt.width <= 0 || rt.height <= 0)
+            {
+                return localRect;
+            }
+
+            var imageAspect = localRect.width / localRect.height;
+            var rtAspect = rt.width / (float)rt.height;
+            if (imageAspect > rtAspect)
+            {
+                var fittedHeight = localRect.width / rtAspect;
+                var yOffset = (localRect.height - fittedHeight) * 0.5f;
+                return new Rect(localRect.xMin, localRect.yMin + yOffset, localRect.width, fittedHeight);
+            }
+
+            var fittedWidth = localRect.height * rtAspect;
+            var xOffset = (localRect.width - fittedWidth) * 0.5f;
+            return new Rect(localRect.xMin + xOffset, localRect.yMin, fittedWidth, localRect.height);
+        }
+
+        private Vector2 ToUnrotatedPaneGuiPoint(Pane pane, Rect contentRect, Vector2 screenPosition)
+        {
+            var guiPos = ToGuiPosition(screenPosition);
+            return InverseRotateGuiPointAroundPivot(guiPos, contentRect.center, GetSliceViewRotationZ(pane));
+        }
+
+        private static Vector2 InverseRotateGuiPointAroundPivot(Vector2 point, Vector2 pivot, float zDegrees)
+        {
+            if (Mathf.Abs(zDegrees) < 0.01f)
+            {
+                return point;
+            }
+
+            var offset = point - pivot;
+            var radians = -zDegrees * Mathf.Deg2Rad;
+            var sin = Mathf.Sin(radians);
+            var cos = Mathf.Cos(radians);
+            return pivot + new Vector2(
+                offset.x * cos - offset.y * sin,
+                offset.x * sin + offset.y * cos);
+        }
+
+        private static bool IsScreenPointInsideRawImage(RawImage rawImage, Vector2 screenPosition)
+        {
+            if (rawImage == null || rawImage.rectTransform == null)
+            {
+                return false;
+            }
+
+            var eventCamera = ResolveUiScreenCamera(rawImage.rectTransform);
+            return RectTransformUtility.RectangleContainsScreenPoint(
+                rawImage.rectTransform,
+                screenPosition,
+                eventCamera);
+        }
+
+        private Vector3 PaneUvToVolume01(Pane pane, float u, float v)
+        {
+            u = Mathf.Clamp01(u);
+            v = Mathf.Clamp01(v);
+
+            switch (pane)
+            {
+                case Pane.A:
+                    return new Vector3(sliceX, v, 1f - u);
+                case Pane.B:
+                    return new Vector3(u, sliceY, 1f - v);
+                case Pane.C:
+                    return new Vector3(u, v, sliceZ);
+                default:
+                    return Vector3.zero;
+            }
+        }
+
+        private Vector3 Volume01ToWorld(Vector3 volume01)
+        {
+            var volumeLocal = Volume01ToVolumeLocal(volume01);
+            return targetRenderer != null
+                ? targetRenderer.transform.TransformPoint(volumeLocal)
+                : volumeLocal;
+        }
+
+        private Vector3 WorldToVolume01(Vector3 worldPosition)
+        {
+            if (targetRenderer == null)
+            {
+                return Clamp01Vector(worldPosition + Vector3.one * 0.5f);
+            }
+
+            var volumeLocal = ClampVolumeLocal(
+                targetRenderer.transform.InverseTransformPoint(worldPosition));
+            return Clamp01Vector(volumeLocal + Vector3.one * 0.5f);
+        }
+
+        private static Vector3 Volume01ToVolumeLocal(Vector3 volume01)
+        {
+            return volume01 - Vector3.one * 0.5f;
+        }
+
+        private static Vector3 ClampVolumeLocal(Vector3 volumeLocal)
+        {
+            return new Vector3(
+                Mathf.Clamp(volumeLocal.x, -0.5f, 0.5f),
+                Mathf.Clamp(volumeLocal.y, -0.5f, 0.5f),
+                Mathf.Clamp(volumeLocal.z, -0.5f, 0.5f));
+        }
+
+        private static Pane ToPane(UiPane uiPane)
+        {
+            return uiPane == UiPane.A ? Pane.A : uiPane == UiPane.B ? Pane.B : Pane.C;
+        }
+
+        private static UiPane ToUiPane(Pane pane)
+        {
+            return pane == Pane.A ? UiPane.A : pane == Pane.B ? UiPane.B : UiPane.C;
         }
 
         private bool TryOverlayUvToContentUv(
@@ -3321,8 +4051,6 @@ namespace SimpleITKUnity
                 legacy.gameObject.SetActive(false);
             }
         }
-
-
 
         private void ConfigureIndicator(LineRenderer line, Color color)
         {
