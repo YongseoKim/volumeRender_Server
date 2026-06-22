@@ -1,19 +1,32 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityEngine.Rendering;
 
 public class MarkerManager : MonoBehaviour
 {
+    [Header("Marker Settings")]
+    [SerializeField] private Button penButton;
+    [SerializeField] private Button redButton;
+    [SerializeField] private Button purpleButton;
+    [SerializeField] private Button eraseButton;
+
+    private Color _redColor = new Color(1f, 0f, 0f, 0.95f);
+    private Color _purpleColor = new Color(0.863f, 0.353f, 1.0f, 0.95f);
+    
     [Header("Pane Line Visuals")]
     [SerializeField] private bool showPaneLineVisuals = true;
     [SerializeField, Range(2f, 32f)] private float lineDragMinPointSpacingPixels = 6f;
     [SerializeField, Range(1f, 12f)] private float paneLineWidthPixels = 4f;
     [SerializeField, Range(0.0005f, 0.02f)] private float volumeLineWidth = 0.003f;
-    [SerializeField] private Color paneLineColor = new Color(1f, 0.35f, 0.35f, 0.95f);
     [SerializeField] private float paneLineLocalDepth = -1f;
     [SerializeField] private int volumeLineLayer = 29;
 
     [SerializeField] private bool logPlacementFailures;
+
+    private Color _activePaneLineColor;
+    private bool _isPenModeActive;
+    private bool _hasSelectedColor;
 
     private struct PaneLineStyle
     {
@@ -59,10 +72,13 @@ public class MarkerManager : MonoBehaviour
     private void Awake()
     {
         ClearMarkers();
+        BindMarkerButtons();
+        ResetMarkerToolState();
     }
 
     private void OnDestroy()
     {
+        UnbindMarkerButtons();
         ClearMarkers();
         DestroyLineMaterials();
     }
@@ -285,7 +301,7 @@ public class MarkerManager : MonoBehaviour
     {
         return new PaneLineStyle
         {
-            Color = paneLineColor,
+            Color = _activePaneLineColor,
             UiWidthPixels = paneLineWidthPixels,
             UiLocalDepth = paneLineLocalDepth,
             VolumeWidth = volumeLineWidth,
@@ -293,9 +309,128 @@ public class MarkerManager : MonoBehaviour
         };
     }
 
-    private static bool CanDrawLines(RectTransform rawImage)
+    private bool CanDrawLines(RectTransform rawImage)
     {
-        return rawImage != null;
+        return rawImage != null && _isPenModeActive && _hasSelectedColor;
+    }
+
+    private void BindMarkerButtons()
+    {
+        if (penButton != null)
+        {
+            penButton.onClick.AddListener(OnPenButtonClicked);
+        }
+
+        if (redButton != null)
+        {
+            redButton.onClick.AddListener(OnRedButtonClicked);
+        }
+
+        if (purpleButton != null)
+        {
+            purpleButton.onClick.AddListener(OnPurpleButtonClicked);
+        }
+
+        if (eraseButton != null)
+        {
+            eraseButton.onClick.AddListener(OnEraseButtonClicked);
+        }
+    }
+
+    private void UnbindMarkerButtons()
+    {
+        if (penButton != null)
+        {
+            penButton.onClick.RemoveListener(OnPenButtonClicked);
+        }
+
+        if (redButton != null)
+        {
+            redButton.onClick.RemoveListener(OnRedButtonClicked);
+        }
+
+        if (purpleButton != null)
+        {
+            purpleButton.onClick.RemoveListener(OnPurpleButtonClicked);
+        }
+
+        if (eraseButton != null)
+        {
+            eraseButton.onClick.RemoveListener(OnEraseButtonClicked);
+        }
+    }
+
+    private void ResetMarkerToolState()
+    {
+        _isPenModeActive = false;
+        _hasSelectedColor = false;
+        SetColorButtonsInteractable(false);
+    }
+
+    private void OnPenButtonClicked()
+    {
+        _isPenModeActive = true;
+        SetColorButtonsInteractable(true);
+    }
+
+    private void OnRedButtonClicked()
+    {
+        if (!_isPenModeActive)
+        {
+            return;
+        }
+
+        _activePaneLineColor = _redColor;
+        _hasSelectedColor = true;
+    }
+
+    private void OnPurpleButtonClicked()
+    {
+        if (!_isPenModeActive)
+        {
+            return;
+        }
+
+        _activePaneLineColor = _purpleColor;
+        _hasSelectedColor = true;
+    }
+
+    private void SelectPaneLineColor(GameObject colorSource, Color color)
+    {
+        _activePaneLineColor = color;
+        _hasSelectedColor = true;
+    }
+
+    private void OnEraseButtonClicked()
+    {
+        EraseMostRecentMarker();
+    }
+
+    private void EraseMostRecentMarker()
+    {
+        if (_completedMarkers.Count == 0)
+        {
+            return;
+        }
+
+        var marker = _completedMarkers[_completedMarkers.Count - 1];
+        _completedMarkers.RemoveAt(_completedMarkers.Count - 1);
+
+        DestroyLineObject(marker.UiLine != null ? marker.UiLine.gameObject : null);
+        DestroyLineObject(marker.VolumeLine != null ? marker.VolumeLine.gameObject : null);
+    }
+
+    private void SetColorButtonsInteractable(bool interactable)
+    {
+        if (redButton != null)
+        {
+            redButton.interactable = interactable;
+        }
+
+        if (purpleButton != null)
+        {
+            purpleButton.interactable = interactable;
+        }
     }
 
     private ActiveDragTrail GetOrCreateActiveDragTrail(
@@ -474,8 +609,12 @@ public class MarkerManager : MonoBehaviour
         EnsureVolumeLineMaterial();
         if (_volumeLineMaterial != null)
         {
-            ApplyVolumeLineMaterialColor(_volumeLineMaterial, style.Color);
-            lineRenderer.sharedMaterial = _volumeLineMaterial;
+            var materialInstance = new Material(_volumeLineMaterial)
+            {
+                hideFlags = HideFlags.DontSave
+            };
+            ApplyVolumeLineMaterialColor(materialInstance, style.Color);
+            lineRenderer.material = materialInstance;
         }
 
         lineRenderer.useWorldSpace = true;
