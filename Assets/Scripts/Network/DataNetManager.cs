@@ -18,6 +18,7 @@ public class DataNetManager : MonoBehaviour
     private int _selectedSampleIndex = -1;
 
     [SerializeField] private FileBtnSpawner fileBtnSpawner;
+    [SerializeField] private VolumeDataNetServer volumeDataNetServer;
 
     public IReadOnlyList<string> SampleEntries => _sampleEntries;
     public int SelectedSampleIndex => _selectedSampleIndex;
@@ -157,6 +158,7 @@ public class DataNetManager : MonoBehaviour
         _selectedSampleIndex = index;
         Debug.Log($"{LogPrefix} Server selected file index: {index} ({fileName})");
         BroadcastSampleSelection(index);
+        SendVolumeForSampleSelection(index);
     }
 
     private void ApplySampleSelection(int index, string sourceLabel)
@@ -174,6 +176,7 @@ public class DataNetManager : MonoBehaviour
         fileBtnSpawner?.SelectByManifestIndex(index);
 
         BroadcastSampleSelection(index);
+        SendVolumeForSampleSelection(index);
     }
 
     private void ResolveFileBtnSpawner()
@@ -184,6 +187,22 @@ public class DataNetManager : MonoBehaviour
         }
 
         fileBtnSpawner = FindFirstObjectByType<FileBtnSpawner>();
+    }
+
+    private void ResolveVolumeDataNetServer()
+    {
+        if (volumeDataNetServer != null)
+        {
+            return;
+        }
+
+        volumeDataNetServer = FindFirstObjectByType<VolumeDataNetServer>();
+    }
+
+    private void SendVolumeForSampleSelection(int index, ulong? targetClientId = null)
+    {
+        ResolveVolumeDataNetServer();
+        volumeDataNetServer?.SendVolumeForSampleIndex(index, targetClientId);
     }
 
     private void BroadcastSampleSelection(int index)
@@ -221,6 +240,11 @@ public class DataNetManager : MonoBehaviour
         }
 
         SendSampleListToClient(clientId);
+
+        if (_selectedSampleIndex >= 0)
+        {
+            SendVolumeForSampleSelection(_selectedSampleIndex, clientId);
+        }
     }
 
     public void RefreshSampleEntries()
