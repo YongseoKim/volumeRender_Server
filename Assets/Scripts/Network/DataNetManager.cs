@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using SimpleITKUnity;
 using Unity.Collections;
@@ -22,6 +23,9 @@ public class DataNetManager : MonoBehaviour
 
     public IReadOnlyList<string> SampleEntries => _sampleEntries;
     public int SelectedSampleIndex => _selectedSampleIndex;
+
+    public event Action<ulong> ClientConnected;
+    public event Action<ulong> ClientDisconnected;
 
     private void OnEnable()
     {
@@ -75,6 +79,7 @@ public class DataNetManager : MonoBehaviour
             networkManager.OnServerStarted -= HandleServerStarted;
             networkManager.OnServerStopped -= HandleServerStopped;
             networkManager.OnClientConnectedCallback -= OnClientConnected;
+            networkManager.OnClientDisconnectCallback -= OnClientDisconnected;
         }
 
         TryUnregisterSampleSelectHandler();
@@ -93,6 +98,8 @@ public class DataNetManager : MonoBehaviour
 
         networkManager.OnClientConnectedCallback -= OnClientConnected;
         networkManager.OnClientConnectedCallback += OnClientConnected;
+        networkManager.OnClientDisconnectCallback -= OnClientDisconnected;
+        networkManager.OnClientDisconnectCallback += OnClientDisconnected;
 
         TryRegisterSampleSelectHandler(networkManager);
     }
@@ -103,6 +110,7 @@ public class DataNetManager : MonoBehaviour
         if (networkManager != null)
         {
             networkManager.OnClientConnectedCallback -= OnClientConnected;
+            networkManager.OnClientDisconnectCallback -= OnClientDisconnected;
         }
 
         TryUnregisterSampleSelectHandler();
@@ -245,6 +253,19 @@ public class DataNetManager : MonoBehaviour
         {
             SendVolumeForSampleSelection(_selectedSampleIndex, clientId);
         }
+
+        ClientConnected?.Invoke(clientId);
+    }
+
+    private void OnClientDisconnected(ulong clientId)
+    {
+        var networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsServer)
+        {
+            return;
+        }
+
+        ClientDisconnected?.Invoke(clientId);
     }
 
     public void RefreshSampleEntries()
