@@ -252,6 +252,12 @@ namespace SimpleITKUnity
             return -1;
         }
 
+        public static bool TryResolveManifestIndex(string fileName, out int index)
+        {
+            index = ResolveManifestIndex(fileName);
+            return index >= 0;
+        }
+
         private void SelectButton(FileBtnManager fileBtn)
         {
             if (_selectedButton == fileBtn)

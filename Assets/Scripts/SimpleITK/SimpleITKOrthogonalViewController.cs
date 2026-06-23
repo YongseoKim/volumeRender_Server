@@ -288,6 +288,7 @@ namespace SimpleITKUnity
         {
             ResetCamera3DView();
             MarkApplyDirty(MprApplyDirty.All);
+            RefreshMarkerFileIndex();
         }
 
         private void MarkApplyDirty(MprApplyDirty flags)
@@ -2425,6 +2426,7 @@ namespace SimpleITKUnity
                 GetPanePlane(pane)?.Anchor,
                 ToMarkerPane(pane),
                 GetSliceCoordinateForPane(pane),
+                ResolveCurrentFileIndex(),
                 eventData.pressEventCamera,
                 eventData.position,
                 volume01,
@@ -2466,6 +2468,7 @@ namespace SimpleITKUnity
                 GetPanePlane(pane)?.Anchor,
                 ToMarkerPane(pane),
                 GetSliceCoordinateForPane(pane),
+                ResolveCurrentFileIndex(),
                 eventData.pressEventCamera,
                 eventData.position,
                 volume01,
@@ -2728,6 +2731,48 @@ namespace SimpleITKUnity
 
             ResolveMarkerManagerIfNeeded();
             markerManager?.SetProjector(this);
+            RefreshMarkerFileIndex();
+        }
+
+        private void RefreshMarkerFileIndex()
+        {
+            ResolveMarkerManagerIfNeeded();
+            markerManager?.SetActiveFileIndex(ResolveCurrentFileIndex());
+        }
+
+        private int ResolveCurrentFileIndex()
+        {
+            var loader = ResolveVolumeLoader();
+            if (loader == null || string.IsNullOrWhiteSpace(loader.SampleFileName))
+            {
+                return -1;
+            }
+
+            return FileBtnSpawner.TryResolveManifestIndex(loader.SampleFileName, out var index)
+                ? index
+                : -1;
+        }
+
+        private SimpleITKVolumeLoader ResolveVolumeLoader()
+        {
+            if (targetRenderer == null)
+            {
+                return FindFirstObjectByType<SimpleITKVolumeLoader>();
+            }
+
+            var current = targetRenderer.transform;
+            while (current != null)
+            {
+                var loader = current.GetComponentInChildren<SimpleITKVolumeLoader>(true);
+                if (loader != null)
+                {
+                    return loader;
+                }
+
+                current = current.parent;
+            }
+
+            return FindFirstObjectByType<SimpleITKVolumeLoader>();
         }
 
         private void RefreshVolumeMarkerUiIfNeeded(MprApplyDirty dirty)

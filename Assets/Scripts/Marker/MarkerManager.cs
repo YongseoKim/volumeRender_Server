@@ -41,6 +41,7 @@ public class MarkerManager : MonoBehaviour
     {
         public MarkerPane Pane;
         public float DrawnSliceCoordinate;
+        public int FileIndex = -1;
         public UILineGraphic UiLine;
         public LineRenderer VolumeLine;
         public readonly List<Vector2> UiPoints = new List<Vector2>();
@@ -54,6 +55,7 @@ public class MarkerManager : MonoBehaviour
     {
         public MarkerPane Pane;
         public float DrawnSliceCoordinate;
+        public int FileIndex = -1;
         public RectTransform RawImage;
         public UILineGraphic UiLine;
         public LineRenderer VolumeLine;
@@ -68,6 +70,7 @@ public class MarkerManager : MonoBehaviour
     private Material _volumeLineMaterial;
     private Material _uiLineMaterial;
     private IVolumeMarkerProjector _projector;
+    private int _activeFileIndex = -1;
 
     private void Awake()
     {
@@ -94,11 +97,23 @@ public class MarkerManager : MonoBehaviour
         RefreshMarkerUi();
     }
 
+    public void SetActiveFileIndex(int fileIndex)
+    {
+        if (_activeFileIndex == fileIndex)
+        {
+            return;
+        }
+
+        _activeFileIndex = fileIndex;
+        RefreshMarkerUi();
+    }
+
     public void BeginDragMarkers(
         RectTransform rawImage,
         Transform volumeLineAnchor,
         MarkerPane pane,
         float drawnSliceCoordinate,
+        int fileIndex,
         Camera eventCamera,
         Vector2 screenPosition,
         Vector3 volume01,
@@ -110,7 +125,7 @@ public class MarkerManager : MonoBehaviour
         }
 
         ClearPaneTrail(rawImage);
-        var trail = GetOrCreateActiveDragTrail(rawImage, volumeLineAnchor, pane, drawnSliceCoordinate);
+        var trail = GetOrCreateActiveDragTrail(rawImage, volumeLineAnchor, pane, drawnSliceCoordinate, fileIndex);
         AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volume01, volumeWorldPosition);
         trail.LastScreenPosition = screenPosition;
         trail.HasLastScreenPosition = true;
@@ -121,6 +136,7 @@ public class MarkerManager : MonoBehaviour
         Transform volumeLineAnchor,
         MarkerPane pane,
         float drawnSliceCoordinate,
+        int fileIndex,
         Camera eventCamera,
         Vector2 screenPosition,
         Vector3 volume01,
@@ -138,12 +154,15 @@ public class MarkerManager : MonoBehaviour
                 volumeLineAnchor,
                 pane,
                 drawnSliceCoordinate,
+                fileIndex,
                 eventCamera,
                 screenPosition,
                 volume01,
                 volumeWorldPosition);
             return;
         }
+
+        trail.FileIndex = fileIndex;
 
         if (trail.HasLastScreenPosition &&
             Vector2.Distance(screenPosition, trail.LastScreenPosition) < lineDragMinPointSpacingPixels)
@@ -227,6 +246,7 @@ public class MarkerManager : MonoBehaviour
         {
             Pane = trail.Pane,
             DrawnSliceCoordinate = trail.DrawnSliceCoordinate,
+            FileIndex = trail.FileIndex,
             RawImage = rawImage,
             UiLine = trail.UiLine,
             VolumeLine = trail.VolumeLine
@@ -244,7 +264,15 @@ public class MarkerManager : MonoBehaviour
             return;
         }
 
+        if (!IsMarkerVisibleForActiveFile(marker.FileIndex))
+        {
+            SetMarkerVisualActive(marker.UiLine, marker.VolumeLine, false);
+            marker.UiLine.ClearPoints();
+            return;
+        }
+
         ApplyProjectedUiPoints(marker.UiLine, marker.Pane, marker.DrawnSliceCoordinate, marker.VolumePoints01);
+        SetMarkerVisualActive(marker.UiLine, marker.VolumeLine, marker.UiLine.gameObject.activeSelf);
     }
 
     private void RefreshActiveTrail(ActiveDragTrail trail, RectTransform rawImage)
@@ -254,7 +282,33 @@ public class MarkerManager : MonoBehaviour
             return;
         }
 
+        if (!IsMarkerVisibleForActiveFile(trail.FileIndex))
+        {
+            SetMarkerVisualActive(trail.UiLine, trail.VolumeLine, false);
+            trail.UiLine.ClearPoints();
+            return;
+        }
+
         ApplyProjectedUiPoints(trail.UiLine, trail.Pane, trail.DrawnSliceCoordinate, trail.VolumePoints01);
+        SetMarkerVisualActive(trail.UiLine, trail.VolumeLine, trail.UiLine.gameObject.activeSelf);
+    }
+
+    private bool IsMarkerVisibleForActiveFile(int fileIndex)
+    {
+        return _activeFileIndex >= 0 && fileIndex == _activeFileIndex;
+    }
+
+    private static void SetMarkerVisualActive(UILineGraphic uiLine, LineRenderer volumeLine, bool visible)
+    {
+        if (uiLine != null)
+        {
+            uiLine.gameObject.SetActive(visible);
+        }
+
+        if (volumeLine != null)
+        {
+            volumeLine.gameObject.SetActive(visible);
+        }
     }
 
     private void ApplyProjectedUiPoints(
@@ -437,14 +491,16 @@ public class MarkerManager : MonoBehaviour
         RectTransform rawImage,
         Transform volumeLineAnchor,
         MarkerPane pane,
-        float drawnSliceCoordinate)
+        float drawnSliceCoordinate,
+        int fileIndex)
     {
         if (!_activeDragTrails.TryGetValue(rawImage, out var trail))
         {
             trail = new ActiveDragTrail
             {
                 Pane = pane,
-                DrawnSliceCoordinate = drawnSliceCoordinate
+                DrawnSliceCoordinate = drawnSliceCoordinate,
+                FileIndex = fileIndex
             };
             _activeDragTrails[rawImage] = trail;
         }
@@ -452,6 +508,7 @@ public class MarkerManager : MonoBehaviour
         {
             trail.Pane = pane;
             trail.DrawnSliceCoordinate = drawnSliceCoordinate;
+            trail.FileIndex = fileIndex;
         }
 
         EnsureTrailRenderers(trail, rawImage, volumeLineAnchor);
