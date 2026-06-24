@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -23,6 +24,23 @@ public class MarkerManager : MonoBehaviour
     [SerializeField] private int volumeLineLayer = 29;
 
     [SerializeField] private bool logPlacementFailures;
+    [SerializeField] private bool deferCompletionToNetwork = true;
+    [SerializeField] private MonoBehaviour paneContextResolverBehaviour;
+
+    public event Action<PaneLineDragBeginData> LocalDragBegun;
+    public event Action<PaneLineDragPointData> LocalDragPointAppended;
+    public event Action<PaneLineDragEndData> LocalDragEnded;
+
+    public bool DeferCompletionToNetwork
+    {
+        get => deferCompletionToNetwork;
+        set => deferCompletionToNetwork = value;
+    }
+
+    public void SetNetworkCommitEnabled(bool enabled)
+    {
+        _networkCommitEnabled = enabled;
+    }
 
     private Color _activePaneLineColor;
     private bool _isPenModeActive;
@@ -53,27 +71,42 @@ public class MarkerManager : MonoBehaviour
 
     private sealed class CompletedPaneMarker
     {
+        public uint MarkerId;
         public MarkerPane Pane;
         public float DrawnSliceCoordinate;
         public int FileIndex = -1;
         public RectTransform RawImage;
         public UILineGraphic UiLine;
         public LineRenderer VolumeLine;
+        public Color LineColor;
+        public float VolumeLineWidth;
         public readonly List<Vector3> VolumePoints01 = new List<Vector3>();
+    }
+
+    private sealed class RemoteDragTrailBinding
+    {
+        public RectTransform RawImage;
+        public Transform VolumeLineAnchor;
+        public ActiveDragTrail Trail;
     }
 
     private readonly List<GameObject> _spawnedLineObjects = new List<GameObject>();
     private readonly Dictionary<RectTransform, ActiveDragTrail> _activeDragTrails =
         new Dictionary<RectTransform, ActiveDragTrail>();
     private readonly List<CompletedPaneMarker> _completedMarkers = new List<CompletedPaneMarker>();
+    private readonly Dictionary<PaneLineDragSessionId, RemoteDragTrailBinding> _remoteDragTrails =
+        new Dictionary<PaneLineDragSessionId, RemoteDragTrailBinding>();
 
     private Material _volumeLineMaterial;
     private Material _uiLineMaterial;
     private IVolumeMarkerProjector _projector;
+    private IMarkerPaneContextResolver _paneContextResolver;
     private int _activeFileIndex = -1;
+    private bool _networkCommitEnabled;
 
     private void Awake()
     {
+        ResolvePaneContextResolver();
         ClearMarkers();
         BindMarkerButtons();
         ResetMarkerToolState();
@@ -126,9 +159,20 @@ public class MarkerManager : MonoBehaviour
 
         ClearPaneTrail(rawImage);
         var trail = GetOrCreateActiveDragTrail(rawImage, volumeLineAnchor, pane, drawnSliceCoordinate, fileIndex);
-        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volume01, volumeWorldPosition);
+        var pointAdded = AppendTrailPoint(
+            trail,
+            rawImage,
+            eventCamera,
+            screenPosition,
+            volume01,
+            volumeWorldPosition);
         trail.LastScreenPosition = screenPosition;
         trail.HasLastScreenPosition = true;
+
+        if (pointAdded)
+        {
+            RaiseLocalDragBegun(trail, volume01);
+        }
     }
 
     public void UpdateDragMarkers(
@@ -171,9 +215,20 @@ public class MarkerManager : MonoBehaviour
         }
 
         EnsureTrailRenderers(trail, rawImage, volumeLineAnchor);
-        AppendTrailPoint(trail, rawImage, eventCamera, screenPosition, volume01, volumeWorldPosition);
+        var pointAdded = AppendTrailPoint(
+            trail,
+            rawImage,
+            eventCamera,
+            screenPosition,
+            volume01,
+            volumeWorldPosition);
         trail.LastScreenPosition = screenPosition;
         trail.HasLastScreenPosition = true;
+
+        if (pointAdded)
+        {
+            RaiseLocalDragPointAppended(trail, volume01);
+        }
     }
 
     public void EndDragMarkers(RectTransform rawImage)
@@ -183,12 +238,164 @@ public class MarkerManager : MonoBehaviour
             return;
         }
 
-        if (_activeDragTrails.TryGetValue(rawImage, out var trail))
+        if (!_activeDragTrails.TryGetValue(rawImage, out var trail))
+        {
+            return;
+        }
+
+        if (ShouldDeferCompletionToNetwork())
+        {
+            var draft = BuildMetadataFromTrail(trail);
+            LocalDragEnded?.Invoke(new PaneLineDragEndData
+            {
+                DraftMetadata = draft,
+            });
+            DestroyTrailRenderers(trail);
+        }
+        else
         {
             FinalizeTrail(trail, rawImage);
         }
 
         _activeDragTrails.Remove(rawImage);
+    }
+
+    public void BeginRemoteDragPreview(in PaneLineDragBeginData data)
+    {
+        if (!showPaneLineVisuals || !TryResolveRemoteDragContext(data, out var rawImage, out var volumeLineAnchor))
+        {
+            return;
+        }
+
+        CancelRemoteDragPreview(data.SessionId);
+
+        var style = CreatePaneLineStyleFromRemote(data.Color, data.VolumeLineWidth);
+        var trail = new ActiveDragTrail
+        {
+            Pane = data.Pane,
+            DrawnSliceCoordinate = data.DrawnSliceCoordinate,
+            FileIndex = data.FileIndex,
+        };
+        EnsureTrailRenderers(trail, rawImage, volumeLineAnchor, style);
+        AppendRemoteTrailPoint(trail, rawImage, volumeLineAnchor, data.FirstVolumePoint01, style);
+
+        _remoteDragTrails[data.SessionId] = new RemoteDragTrailBinding
+        {
+            RawImage = rawImage,
+            VolumeLineAnchor = volumeLineAnchor,
+            Trail = trail,
+        };
+    }
+
+    public void UpdateRemoteDragPreview(in PaneLineDragPointData data)
+    {
+        if (!showPaneLineVisuals ||
+            !_remoteDragTrails.TryGetValue(data.SessionId, out var binding) ||
+            binding?.Trail == null ||
+            binding.RawImage == null)
+        {
+            return;
+        }
+
+        var style = CreatePaneLineStyleFromRemote(
+            binding.Trail.UiLine != null ? binding.Trail.UiLine.color : _activePaneLineColor,
+            volumeLineWidth);
+        EnsureTrailRenderers(binding.Trail, binding.RawImage, binding.VolumeLineAnchor, style);
+        AppendRemoteTrailPoint(
+            binding.Trail,
+            binding.RawImage,
+            binding.VolumeLineAnchor,
+            data.VolumePoint01,
+            style);
+    }
+
+    public void EndRemoteDragPreview(PaneLineDragSessionId sessionId)
+    {
+        CancelRemoteDragPreview(sessionId);
+    }
+
+    public void CancelRemoteDragPreview(PaneLineDragSessionId sessionId)
+    {
+        if (!_remoteDragTrails.TryGetValue(sessionId, out var binding))
+        {
+            return;
+        }
+
+        DestroyTrailRenderers(binding.Trail);
+        _remoteDragTrails.Remove(sessionId);
+    }
+
+    public void ApplyRemoteMarker(in PaneLineVolumeMetadata metadata)
+    {
+        if (!showPaneLineVisuals || !metadata.IsValid)
+        {
+            return;
+        }
+
+        if (!TryResolveRemoteMarkerContext(metadata, out var rawImage, out var volumeLineAnchor))
+        {
+            Debug.LogWarning("[MarkerManager] Could not resolve pane context for remote marker.", this);
+            return;
+        }
+
+        var style = CreatePaneLineStyleFromRemote(metadata.Color, metadata.VolumeLineWidth);
+        var uiLine = CreateUiLine(rawImage, style);
+        LineRenderer volumeLine = null;
+        if (volumeLineAnchor != null)
+        {
+            volumeLine = CreateVolumeLine(volumeLineAnchor, style, metadata.FileIndex);
+        }
+
+        var marker = new CompletedPaneMarker
+        {
+            MarkerId = metadata.MarkerId,
+            Pane = metadata.Pane,
+            DrawnSliceCoordinate = metadata.DrawnSliceCoordinate,
+            FileIndex = metadata.FileIndex,
+            RawImage = rawImage,
+            UiLine = uiLine,
+            VolumeLine = volumeLine,
+            LineColor = metadata.Color,
+            VolumeLineWidth = metadata.VolumeLineWidth,
+        };
+        marker.VolumePoints01.AddRange(metadata.VolumePoints01);
+
+        if (volumeLine != null)
+        {
+            ApplyVolumeLinePositionsFromMetadata(volumeLine, metadata);
+        }
+
+        _completedMarkers.Add(marker);
+        RefreshCompletedMarker(marker);
+    }
+
+    public void RemoveRemoteMarker(uint markerId)
+    {
+        for (var i = _completedMarkers.Count - 1; i >= 0; --i)
+        {
+            if (_completedMarkers[i].MarkerId != markerId)
+            {
+                continue;
+            }
+
+            var marker = _completedMarkers[i];
+            _completedMarkers.RemoveAt(i);
+            DestroyLineObject(marker.UiLine != null ? marker.UiLine.gameObject : null);
+            DestroyLineObject(marker.VolumeLine != null ? marker.VolumeLine.gameObject : null);
+            return;
+        }
+    }
+
+    public void ClearCommittedMarkers()
+    {
+        for (var i = _completedMarkers.Count - 1; i >= 0; --i)
+        {
+            var marker = _completedMarkers[i];
+            DestroyLineObject(marker.UiLine != null ? marker.UiLine.gameObject : null);
+            DestroyLineObject(marker.VolumeLine != null ? marker.VolumeLine.gameObject : null);
+        }
+
+        _completedMarkers.Clear();
     }
 
     public void RefreshMarkerUi()
@@ -207,11 +414,17 @@ public class MarkerManager : MonoBehaviour
         {
             RefreshActiveTrail(pair.Value, pair.Key);
         }
+
+        foreach (var pair in _remoteDragTrails)
+        {
+            RefreshRemoteDragTrail(pair.Value, pair.Key);
+        }
     }
 
     public void ClearMarkers()
     {
         _activeDragTrails.Clear();
+        _remoteDragTrails.Clear();
         _completedMarkers.Clear();
 
         for (var i = _spawnedLineObjects.Count - 1; i >= 0; --i)
@@ -249,12 +462,205 @@ public class MarkerManager : MonoBehaviour
             FileIndex = trail.FileIndex,
             RawImage = rawImage,
             UiLine = trail.UiLine,
-            VolumeLine = trail.VolumeLine
+            VolumeLine = trail.VolumeLine,
+            LineColor = _activePaneLineColor,
+            VolumeLineWidth = volumeLineWidth,
         };
         marker.VolumePoints01.AddRange(trail.VolumePoints01);
 
         _completedMarkers.Add(marker);
         RefreshCompletedMarker(marker);
+    }
+
+    private bool ShouldDeferCompletionToNetwork()
+    {
+        return deferCompletionToNetwork && _networkCommitEnabled;
+    }
+
+    private void RaiseLocalDragBegun(ActiveDragTrail trail, Vector3 firstVolumePoint01)
+    {
+        if (LocalDragBegun == null)
+        {
+            return;
+        }
+
+        LocalDragBegun.Invoke(new PaneLineDragBeginData
+        {
+            Pane = trail.Pane,
+            DrawnSliceCoordinate = trail.DrawnSliceCoordinate,
+            FileIndex = trail.FileIndex,
+            Color = _activePaneLineColor,
+            VolumeLineWidth = volumeLineWidth,
+            FirstVolumePoint01 = firstVolumePoint01,
+        });
+    }
+
+    private void RaiseLocalDragPointAppended(ActiveDragTrail trail, Vector3 volumePoint01)
+    {
+        LocalDragPointAppended?.Invoke(new PaneLineDragPointData
+        {
+            Pane = trail.Pane,
+            FileIndex = trail.FileIndex,
+            VolumePoint01 = volumePoint01,
+        });
+    }
+
+    private PaneLineVolumeMetadata BuildMetadataFromTrail(ActiveDragTrail trail)
+    {
+        return new PaneLineVolumeMetadata
+        {
+            Pane = trail.Pane,
+            DrawnSliceCoordinate = trail.DrawnSliceCoordinate,
+            FileIndex = trail.FileIndex,
+            Color = _activePaneLineColor,
+            VolumeLineWidth = volumeLineWidth,
+            VolumePoints01 = trail.VolumePoints01.ToArray(),
+        };
+    }
+
+    private void ResolvePaneContextResolver()
+    {
+        if (_paneContextResolver != null)
+        {
+            return;
+        }
+
+        if (paneContextResolverBehaviour is IMarkerPaneContextResolver resolver)
+        {
+            _paneContextResolver = resolver;
+            return;
+        }
+
+        foreach (var behaviour in FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None))
+        {
+            if (behaviour is IMarkerPaneContextResolver candidate)
+            {
+                _paneContextResolver = candidate;
+                paneContextResolverBehaviour = behaviour;
+                return;
+            }
+        }
+    }
+
+    private bool TryResolveRemoteDragContext(
+        in PaneLineDragBeginData data,
+        out RectTransform rawImage,
+        out Transform volumeLineAnchor)
+    {
+        ResolvePaneContextResolver();
+        if (_paneContextResolver != null &&
+            _paneContextResolver.TryResolvePaneContext(data.Pane, data.FileIndex, out rawImage, out volumeLineAnchor))
+        {
+            return rawImage != null;
+        }
+
+        rawImage = null;
+        volumeLineAnchor = null;
+        return false;
+    }
+
+    private bool TryResolveRemoteMarkerContext(
+        in PaneLineVolumeMetadata metadata,
+        out RectTransform rawImage,
+        out Transform volumeLineAnchor)
+    {
+        ResolvePaneContextResolver();
+        if (_paneContextResolver != null &&
+            _paneContextResolver.TryResolvePaneContext(metadata.Pane, metadata.FileIndex, out rawImage, out volumeLineAnchor))
+        {
+            return rawImage != null;
+        }
+
+        rawImage = null;
+        volumeLineAnchor = null;
+        return false;
+    }
+
+    private PaneLineStyle CreatePaneLineStyleFromRemote(Color color, float remoteVolumeLineWidth)
+    {
+        return new PaneLineStyle
+        {
+            Color = color,
+            UiWidthPixels = paneLineWidthPixels,
+            UiLocalDepth = paneLineLocalDepth,
+            VolumeWidth = remoteVolumeLineWidth > 0f ? remoteVolumeLineWidth : volumeLineWidth,
+            VolumeLineLayer = volumeLineLayer,
+        };
+    }
+
+    private void AppendRemoteTrailPoint(
+        ActiveDragTrail trail,
+        RectTransform rawImage,
+        Transform volumeLineAnchor,
+        Vector3 volume01,
+        PaneLineStyle style)
+    {
+        if (trail.VolumePoints01.Count == 0 ||
+            Vector3.Distance(trail.VolumePoints01[trail.VolumePoints01.Count - 1], volume01) > 1e-5f)
+        {
+            trail.VolumePoints01.Add(volume01);
+        }
+
+        if (_projector != null &&
+            _projector.TryProjectVolume01ToRawImageLocal(trail.Pane, volume01, out var localPoint) &&
+            (trail.UiPoints.Count == 0 ||
+             Vector2.Distance(trail.UiPoints[trail.UiPoints.Count - 1], localPoint) > 0.01f))
+        {
+            trail.UiPoints.Add(localPoint);
+            if (trail.UiLine != null)
+            {
+                trail.UiLine.gameObject.SetActive(true);
+                trail.UiLine.AddPoint(localPoint);
+            }
+        }
+
+        if (trail.VolumeLine != null)
+        {
+            ResolvePaneContextResolver();
+            if (_paneContextResolver != null &&
+                _paneContextResolver.TryVolume01ToWorld(trail.Pane, volume01, out var worldPosition) &&
+                (trail.VolumePoints.Count == 0 ||
+                 Vector3.Distance(trail.VolumePoints[trail.VolumePoints.Count - 1], worldPosition) > 1e-5f))
+            {
+                trail.VolumePoints.Add(worldPosition);
+                trail.VolumeLine.positionCount = trail.VolumePoints.Count;
+                trail.VolumeLine.SetPosition(trail.VolumePoints.Count - 1, worldPosition);
+            }
+        }
+    }
+
+    private void ApplyVolumeLinePositionsFromMetadata(LineRenderer volumeLine, in PaneLineVolumeMetadata metadata)
+    {
+        if (volumeLine == null || metadata.VolumePoints01 == null)
+        {
+            return;
+        }
+
+        ResolvePaneContextResolver();
+        if (_paneContextResolver == null)
+        {
+            return;
+        }
+
+        var worldPoints = new List<Vector3>(metadata.VolumePoints01.Length);
+        for (var i = 0; i < metadata.VolumePoints01.Length; ++i)
+        {
+            if (_paneContextResolver.TryVolume01ToWorld(metadata.Pane, metadata.VolumePoints01[i], out var worldPoint))
+            {
+                worldPoints.Add(worldPoint);
+            }
+        }
+
+        if (worldPoints.Count < 2)
+        {
+            return;
+        }
+
+        volumeLine.positionCount = worldPoints.Count;
+        for (var i = 0; i < worldPoints.Count; ++i)
+        {
+            volumeLine.SetPosition(i, worldPoints[i]);
+        }
     }
 
     private void RefreshCompletedMarker(CompletedPaneMarker marker)
@@ -266,13 +672,14 @@ public class MarkerManager : MonoBehaviour
 
         if (!IsMarkerVisibleForActiveFile(marker.FileIndex))
         {
-            SetMarkerVisualActive(marker.UiLine, marker.VolumeLine, false);
+            SetUiLineActive(marker.UiLine, false);
+            SetVolumeLineActive(marker.VolumeLine, false);
             marker.UiLine.ClearPoints();
             return;
         }
 
         ApplyProjectedUiPoints(marker.UiLine, marker.Pane, marker.DrawnSliceCoordinate, marker.VolumePoints01);
-        SetMarkerVisualActive(marker.UiLine, marker.VolumeLine, marker.UiLine.gameObject.activeSelf);
+        SetVolumeLineActive(marker.VolumeLine, HasRenderableVolumeLine(marker.VolumeLine));
     }
 
     private void RefreshActiveTrail(ActiveDragTrail trail, RectTransform rawImage)
@@ -284,13 +691,24 @@ public class MarkerManager : MonoBehaviour
 
         if (!IsMarkerVisibleForActiveFile(trail.FileIndex))
         {
-            SetMarkerVisualActive(trail.UiLine, trail.VolumeLine, false);
+            SetUiLineActive(trail.UiLine, false);
+            SetVolumeLineActive(trail.VolumeLine, false);
             trail.UiLine.ClearPoints();
             return;
         }
 
         ApplyProjectedUiPoints(trail.UiLine, trail.Pane, trail.DrawnSliceCoordinate, trail.VolumePoints01);
-        SetMarkerVisualActive(trail.UiLine, trail.VolumeLine, trail.UiLine.gameObject.activeSelf);
+        SetVolumeLineActive(trail.VolumeLine, HasRenderableVolumeLine(trail.VolumeLine));
+    }
+
+    private void RefreshRemoteDragTrail(RemoteDragTrailBinding binding, PaneLineDragSessionId sessionId)
+    {
+        if (binding?.Trail?.UiLine == null)
+        {
+            return;
+        }
+
+        RefreshActiveTrail(binding.Trail, binding.RawImage);
     }
 
     private bool IsMarkerVisibleForActiveFile(int fileIndex)
@@ -298,13 +716,21 @@ public class MarkerManager : MonoBehaviour
         return _activeFileIndex >= 0 && fileIndex == _activeFileIndex;
     }
 
-    private static void SetMarkerVisualActive(UILineGraphic uiLine, LineRenderer volumeLine, bool visible)
+    private static bool HasRenderableVolumeLine(LineRenderer volumeLine)
+    {
+        return volumeLine != null && volumeLine.positionCount >= 2;
+    }
+
+    private static void SetUiLineActive(UILineGraphic uiLine, bool visible)
     {
         if (uiLine != null)
         {
             uiLine.gameObject.SetActive(visible);
         }
+    }
 
+    private static void SetVolumeLineActive(LineRenderer volumeLine, bool visible)
+    {
         if (volumeLine != null)
         {
             volumeLine.gameObject.SetActive(visible);
@@ -449,12 +875,6 @@ public class MarkerManager : MonoBehaviour
         _hasSelectedColor = true;
     }
 
-    private void SelectPaneLineColor(GameObject colorSource, Color color)
-    {
-        _activePaneLineColor = color;
-        _hasSelectedColor = true;
-    }
-
     private void OnEraseButtonClicked()
     {
         EraseMostRecentMarker();
@@ -520,8 +940,15 @@ public class MarkerManager : MonoBehaviour
         RectTransform rawImage,
         Transform volumeLineAnchor)
     {
-        var style = CreatePaneLineStyle();
+        EnsureTrailRenderers(trail, rawImage, volumeLineAnchor, CreatePaneLineStyle());
+    }
 
+    private void EnsureTrailRenderers(
+        ActiveDragTrail trail,
+        RectTransform rawImage,
+        Transform volumeLineAnchor,
+        PaneLineStyle style)
+    {
         if (trail.UiLine == null)
         {
             trail.UiLine = CreateUiLine(rawImage, style);
@@ -538,7 +965,7 @@ public class MarkerManager : MonoBehaviour
 
         if (trail.VolumeLine == null)
         {
-            trail.VolumeLine = CreateVolumeLine(volumeLineAnchor, style);
+            trail.VolumeLine = CreateVolumeLine(volumeLineAnchor, style, trail.FileIndex);
         }
         else
         {
@@ -546,7 +973,7 @@ public class MarkerManager : MonoBehaviour
         }
     }
 
-    private void AppendTrailPoint(
+    private bool AppendTrailPoint(
         ActiveDragTrail trail,
         RectTransform rawImage,
         Camera eventCamera,
@@ -554,10 +981,12 @@ public class MarkerManager : MonoBehaviour
         Vector3 volume01,
         Vector3 volumeWorldPosition)
     {
+        var addedVolumePoint = false;
         if (trail.VolumePoints01.Count == 0 ||
             Vector3.Distance(trail.VolumePoints01[trail.VolumePoints01.Count - 1], volume01) > 1e-5f)
         {
             trail.VolumePoints01.Add(volume01);
+            addedVolumePoint = true;
         }
 
         Vector2 localPoint = default;
@@ -605,6 +1034,8 @@ public class MarkerManager : MonoBehaviour
                 trail.VolumeLine.SetPosition(trail.VolumePoints.Count - 1, volumeWorldPosition);
             }
         }
+
+        return addedVolumePoint;
     }
 
     private UILineGraphic CreateUiLine(RectTransform rawImage, PaneLineStyle style)
@@ -626,9 +1057,9 @@ public class MarkerManager : MonoBehaviour
         return graphic;
     }
 
-    private LineRenderer CreateVolumeLine(Transform volumeLineAnchor, PaneLineStyle style)
+    private LineRenderer CreateVolumeLine(Transform volumeLineAnchor, PaneLineStyle style, int fileIndex)
     {
-        var lineObject = new GameObject("PaneDragLine_Volume");
+        var lineObject = new GameObject($"PaneDragLine_Volume_{fileIndex}");
         lineObject.transform.SetParent(volumeLineAnchor, false);
 
         var lineRenderer = lineObject.AddComponent<LineRenderer>();
@@ -805,11 +1236,11 @@ public class MarkerManager : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            Object.Destroy(material);
+            UnityEngine.Object.Destroy(material);
         }
         else
         {
-            Object.DestroyImmediate(material);
+            UnityEngine.Object.DestroyImmediate(material);
         }
 
         material = null;
