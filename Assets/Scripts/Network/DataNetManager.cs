@@ -279,6 +279,7 @@ public class DataNetManager : MonoBehaviour
         }
 
         Debug.Log($"{LogPrefix} Loaded {_sampleEntries.Count} sample entries from manifest.txt.");
+        BroadcastSampleListToAllClients();
     }
 
     public bool TryGetSampleFileName(int index, out string fileName)
@@ -293,6 +294,26 @@ public class DataNetManager : MonoBehaviour
         return true;
     }
 
+    private void BroadcastSampleListToAllClients()
+    {
+        var networkManager = NetworkManager.Singleton;
+        if (networkManager == null || !networkManager.IsServer)
+        {
+            return;
+        }
+
+        var clientIds = networkManager.ConnectedClientsIds;
+        if (clientIds.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < clientIds.Count; i++)
+        {
+            SendSampleListToClient(clientIds[i]);
+        }
+    }
+
     private void SendSampleListToClient(ulong clientId)
     {
         var networkManager = NetworkManager.Singleton;
@@ -303,7 +324,11 @@ public class DataNetManager : MonoBehaviour
 
         if (_sampleEntries.Count == 0)
         {
-            RefreshSampleEntries();
+            var entries = FileBtnSpawner.GetSampleEntriesFromManifest();
+            for (var i = 0; i < entries.Count; i++)
+            {
+                _sampleEntries.Add(entries[i]);
+            }
         }
 
         var count = _sampleEntries.Count;

@@ -4,5 +4,4 @@
 BraTS2021_00000_flair.nrrd
 CTChest.nrrd
 DICOM_MRI_TOF
-DICOM_MR_SE000002
 Kitware_Head_and_Neck.mha
