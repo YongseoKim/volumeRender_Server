@@ -17,7 +17,7 @@ namespace SimpleITKUnity
     [ExecuteAlways]
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(-10)]
-    public class SimpleITKOrthogonalViewController : MonoBehaviour, IVolumeMarkerProjector
+    public class SimpleITKOrthogonalViewController : MonoBehaviour, IVolumeMarkerProjector, IMarkerPaneContextResolver
     {
         private const int SliceLayerA = 26;
         private const int SliceLayerB = 27;
@@ -2802,6 +2802,42 @@ namespace SimpleITKUnity
             out Vector2 rawImageLocal)
         {
             return TryProjectVolume01ToRawImageLocal(pane, volume01, out rawImageLocal);
+        }
+
+        bool IMarkerPaneContextResolver.TryResolvePaneContext(
+            MarkerPane pane,
+            int fileIndex,
+            out RectTransform rawImage,
+            out Transform volumeLineAnchor)
+        {
+            rawImage = null;
+            volumeLineAnchor = null;
+
+            var internalPane = ToInternalPane(pane);
+            var sliceRawImage = GetSliceRawImage(internalPane);
+            if (sliceRawImage == null)
+            {
+                return false;
+            }
+
+            rawImage = sliceRawImage.rectTransform;
+            volumeLineAnchor = GetPanePlane(internalPane)?.Anchor;
+            return rawImage != null;
+        }
+
+        bool IMarkerPaneContextResolver.TryVolume01ToWorld(
+            MarkerPane pane,
+            Vector3 volume01,
+            out Vector3 worldPosition)
+        {
+            worldPosition = default;
+            if (targetRenderer == null)
+            {
+                return false;
+            }
+
+            worldPosition = Volume01ToWorld(volume01);
+            return true;
         }
 
         private bool IsMarkerVisibleOnCurrentSlice(MarkerPane pane, float drawnSliceCoordinate)

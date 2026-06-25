@@ -502,15 +502,23 @@ public class MarkerNetService : MonoBehaviour
 
         _serverStore.Save(metadata);
         _activeRemoteSessions.Remove(dragEnd.SessionId);
-
         markerManager?.EndRemoteDragPreview(dragEnd.SessionId);
+
+        markerManager?.ApplyRemoteMarker(metadata);
+
+        var excludeId = ulong.MaxValue;
+        var nm = NetworkManager.Singleton;
+        if (nm != null && nm.IsClient && senderClientId == nm.LocalClientId)
+        {
+            excludeId = senderClientId;
+        }
 
         BroadcastToClients(
             MarkerNetworkProtocol.MarkerCreatedMessageName,
             writer => MarkerNetworkProtocol.WriteMetadata(writer, metadata),
             MarkerNetworkProtocol.MarkerCommitDelivery,
             MarkerNetworkProtocol.EstimateMetadataSize(metadata),
-            excludeClientId: ulong.MaxValue);
+            excludeClientId: excludeId);
     }
 
     private void HandleServerClientConnected(ulong clientId)

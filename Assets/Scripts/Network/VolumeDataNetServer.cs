@@ -220,6 +220,7 @@ public class VolumeDataNetServer : MonoBehaviour
         var chunkSize = Mathf.Max(1024, chunkPayloadBytes);
         var chunkBuffer = new byte[chunkSize];
         var sentChunks = 0;
+        var effectiveYieldEveryNChunks = recipientIds.Count >= 2 ? 1 : yieldEveryNChunks;
 
         for (ushort chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex)
         {
@@ -237,7 +238,7 @@ public class VolumeDataNetServer : MonoBehaviour
             SendChunk(transferId, chunkIndex, totalChunks, chunkBytes, recipientIds);
             sentChunks++;
 
-            if (yieldEveryNChunks > 0 && sentChunks % yieldEveryNChunks == 0)
+            if (effectiveYieldEveryNChunks > 0 && sentChunks % effectiveYieldEveryNChunks == 0)
             {
                 await Task.Yield();
             }
@@ -286,12 +287,13 @@ public class VolumeDataNetServer : MonoBehaviour
             return;
         }
 
+        using var writer = new FastBufferWriter(
+            VolumeNetworkProtocol.EstimateChunkMessageSize(chunkBytes.Length),
+            Allocator.Temp);
+        VolumeNetworkProtocol.WriteChunk(writer, transferId, chunkIndex, totalChunks, chunkBytes);
+
         for (var i = 0; i < recipientIds.Count; ++i)
         {
-            using var writer = new FastBufferWriter(
-                VolumeNetworkProtocol.EstimateChunkMessageSize(chunkBytes.Length),
-                Allocator.Temp);
-            VolumeNetworkProtocol.WriteChunk(writer, transferId, chunkIndex, totalChunks, chunkBytes);
             SendVolumeMessage(
                 messaging,
                 VolumeNetworkProtocol.VolumeChunkMessageName,

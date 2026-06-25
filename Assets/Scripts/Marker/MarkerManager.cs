@@ -798,7 +798,7 @@ public class MarkerManager : MonoBehaviour
     {
         if (penButton != null)
         {
-            penButton.onClick.AddListener(OnPenButtonClicked);
+            penButton.onClick.AddListener(OnPenButtonToggleClicked);
         }
 
         if (redButton != null)
@@ -821,7 +821,7 @@ public class MarkerManager : MonoBehaviour
     {
         if (penButton != null)
         {
-            penButton.onClick.RemoveListener(OnPenButtonClicked);
+            penButton.onClick.RemoveListener(OnPenButtonToggleClicked);
         }
 
         if (redButton != null)
@@ -847,10 +847,28 @@ public class MarkerManager : MonoBehaviour
         SetColorButtonsInteractable(false);
     }
 
+    private void OnPenButtonToggleClicked()
+    {
+        if (_isPenModeActive)
+        {
+            OffPenButtonClicked();
+        }
+        else
+        {
+            OnPenButtonClicked();
+        }
+    }
+
     private void OnPenButtonClicked()
     {
         _isPenModeActive = true;
         SetColorButtonsInteractable(true);
+    }
+
+    private void OffPenButtonClicked()
+    {
+        _isPenModeActive = false;
+        SetColorButtonsInteractable(false);
     }
 
     private void OnRedButtonClicked()
