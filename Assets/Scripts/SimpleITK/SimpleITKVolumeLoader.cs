@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -29,7 +30,7 @@ namespace SimpleITKUnity
         [SerializeField] private string segmentationColorMapFileName = SimpleITKSegmentationColorMap.DefaultFileName;
 
         [Header("Inference")]
-        [SerializeField] private BratsSentisInference segmentationInference;
+        [SerializeField] private SegmentationInferenceBehaviour segmentationInference;
 
         [Header("Loaded Volume Info")]
         [SerializeField] private int loadedWidth;
@@ -149,6 +150,9 @@ namespace SimpleITKUnity
 
         /// <summary>
         /// Sets <see cref="sampleFileName"/> (relative to StreamingAssets/Sample) and reloads the volume.
+        /// Also assigns <see cref="segmentationSampleFileName"/> to the matching {name}_seg.nrrd entry
+        /// and picks a segmentation color map for the sample type.
+        /// Segmentation I/O runs only after this call (user click), not at Play start.
         /// </summary>
         public void LoadSampleFile(string fileName)
         {
@@ -159,6 +163,7 @@ namespace SimpleITKUnity
             }
 
             sampleFileName = fileName.Replace('\\', '/').Trim().TrimStart('/');
+            AssignSegmentationSourceForSample(sampleFileName);
             LoadVolume();
         }
 
@@ -253,13 +258,14 @@ namespace SimpleITKUnity
                     _editorAutoLoadAttempted = true;
                     _lastEditorAutoLoadPath = resolvedPath;
                     viewController?.NotifyVolumeDataApplied();
+
+                    // Apply segmentation as soon as the volume texture exists. Do not wait for the
+                    // deferred 3D-mesh frame gate — that wait can be cancelled and previously skipped seg load.
+                    await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token, logFailures: true);
+
                     if (targetRenderer.IsDeferringVolumeMeshRendering)
                     {
                         await CompleteVolumeLoadAfterSlicesAsync(token);
-                    }
-                    else
-                    {
-                        await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token);
                     }
                 }
             }
@@ -358,9 +364,20 @@ namespace SimpleITKUnity
 
         private async Task ApplyConfiguredSegmentationAfterVolumeLoadAsync(CancellationToken token, bool logFailures = false)
         {
+            if (token.IsCancellationRequested || this == null || !isActiveAndEnabled)
+            {
+                LogSegmentationWarning(logFailures, "skipped segmentation overlay load", "load was cancelled or loader disabled");
+                return;
+            }
+
             if (!TryResolveConfiguredSegmentationPathForLoad(logFailures, out var resolvedPath))
             {
                 return;
+            }
+
+            if (logFailures)
+            {
+                Debug.Log($"SimpleITKVolumeLoader: resolving segmentation overlay '{resolvedPath}'.");
             }
 
             var readablePath = resolvedPath;
@@ -375,6 +392,12 @@ namespace SimpleITKUnity
                 return;
             }
 
+            if (token.IsCancellationRequested || this == null || !isActiveAndEnabled)
+            {
+                LogSegmentationWarning(logFailures, "skipped segmentation overlay load", "load was cancelled after path prepare");
+                return;
+            }
+
             readablePath = prepareResult.ReadablePath;
             if (!SimpleITKNative.TryReadLabelVolumeUInt8(readablePath, out var segmentationData, out var readError))
             {
@@ -383,7 +406,27 @@ namespace SimpleITKUnity
                 return;
             }
 
-            TryApplyConfiguredSegmentationData(segmentationData, readablePath, logFailures);
+            if (logFailures)
+            {
+                Debug.Log(
+                    $"SimpleITKVolumeLoader: read segmentation overlay '{readablePath}' " +
+                    $"size=({segmentationData.Width},{segmentationData.Height},{segmentationData.Depth}), " +
+                    $"volume=({loadedWidth},{loadedHeight},{loadedDepth}), labels<={segmentationData.LabelMaximum}.");
+            }
+
+            if (TryApplyConfiguredSegmentationData(segmentationData, readablePath, logFailures))
+            {
+                if (logFailures)
+                {
+                    Debug.Log($"SimpleITKVolumeLoader: applied segmentation overlay '{readablePath}'.");
+                    if (segmentationData.LabelMaximum == 0)
+                    {
+                        Debug.LogWarning(
+                            $"SimpleITKVolumeLoader: segmentation overlay '{readablePath}' contains only background " +
+                            "(label 0). No colored regions will appear on A/B/C until a non-empty _seg.nrrd is generated.");
+                    }
+                }
+            }
         }
 
         private void CancelPendingLoad(bool clearLoadingState = true)
@@ -408,6 +451,7 @@ namespace SimpleITKUnity
 
         /// <summary>
         /// Waits for ABC slice cameras to render into RawImage RTs, then enables 3D volume raymarching.
+        /// Segmentation overlay is applied earlier (immediately after volume upload).
         /// </summary>
         private async Task CompleteVolumeLoadAfterSlicesAsync(CancellationToken token)
         {
@@ -420,7 +464,6 @@ namespace SimpleITKUnity
             }
 
             targetRenderer?.EnableVolumeMeshRendering();
-            await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token);
         }
 
         private static async Task WaitForNextFrameAsync(CancellationToken token)
@@ -544,13 +587,8 @@ namespace SimpleITKUnity
 
             try
             {
-                ReportSegmentationGenerationProgress(0.02f, "Resolving source volume...");
+                ReportSegmentationGenerationProgress(0.02f, "Scanning Sample DICOM series...");
                 ResolveTargets();
-                if (!TryResolveVolumePath(out var resolvedVolumePath, out var resolveError))
-                {
-                    Debug.LogError($"SimpleITKVolumeLoader: failed to resolve source volume for segmentation generation: {resolveError}");
-                    return;
-                }
 
                 if (segmentationInference == null)
                 {
@@ -559,55 +597,116 @@ namespace SimpleITKUnity
 
                 if (segmentationInference == null)
                 {
-                    Debug.LogError("SimpleITKVolumeLoader: BratsSentisInference is not assigned.");
+                    Debug.LogError("SimpleITKVolumeLoader: Segmentation inference component is not assigned.");
                     return;
                 }
 
-                if (!segmentationInference.TryPrepareSegmentationForVolume(
-                        resolvedVolumePath,
-                        out var segmentationData,
-                        out var segmentationSummary,
-                        out var segmentationError,
-                        forceCpuBackend: true,
-                        progress: ReportSegmentationGenerationProgress))
+                var dicomSeries = CollectDicomSeriesDirectoriesUnderSample();
+                if (dicomSeries.Count == 0)
                 {
-                    Debug.LogError($"SimpleITKVolumeLoader: failed to prepare segmentation volume: {segmentationError}");
+                    Debug.LogError(
+                        "SimpleITKVolumeLoader: no DICOM series folders found under StreamingAssets/Sample. " +
+                        "Expected top-level folders that contain .dcm/.dicom/.ima files.");
                     return;
                 }
 
-                ReportSegmentationGenerationProgress(0.82f, "Saving segmentation volume...");
-                var outputPath = ResolveGeneratedSegmentationOutputPath(resolvedVolumePath);
-                if (!SimpleITKNative.TryWriteLabelVolumeUInt8(outputPath, segmentationData, useCompression: true, out var writeError))
+                if (!TryEnsureSegmentedDirectory(out var segmentedDirectory, out var segmentedDirError))
                 {
-                    Debug.LogError($"SimpleITKVolumeLoader: failed to write segmentation volume '{outputPath}': {writeError}");
+                    Debug.LogError($"SimpleITKVolumeLoader: {segmentedDirError}");
                     return;
                 }
 
-                ReportSegmentationGenerationProgress(0.9f, "Assigning generated file...");
-                if (!TryAssignSegmentationSampleFileName(outputPath, out var assignError))
+                var successCount = 0;
+                var failureCount = 0;
+                string lastOutputPath = null;
+                string lastSummary = string.Empty;
+
+                for (var i = 0; i < dicomSeries.Count; ++i)
+                {
+                    var seriesDirectory = dicomSeries[i];
+                    var seriesName = Path.GetFileName(seriesDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    var seriesProgressBase = (float)i / dicomSeries.Count;
+                    var seriesProgressSpan = 1f / dicomSeries.Count;
+
+                    ReportSegmentationGenerationProgress(
+                        seriesProgressBase + (seriesProgressSpan * 0.05f),
+                        $"[{i + 1}/{dicomSeries.Count}] Inferring {seriesName}...");
+
+                    Action<float, string> seriesProgress = (progress, status) =>
+                    {
+                        var clamped = Mathf.Clamp01(progress);
+                        var mapped = seriesProgressBase + (seriesProgressSpan * (0.05f + (clamped * 0.75f)));
+                        ReportSegmentationGenerationProgress(
+                            mapped,
+                            $"[{i + 1}/{dicomSeries.Count}] {seriesName}: {status}");
+                    };
+
+                    if (!segmentationInference.TryPrepareSegmentationForVolume(
+                            seriesDirectory,
+                            out var segmentationData,
+                            out var segmentationSummary,
+                            out var segmentationError,
+                            forceCpuBackend: true,
+                            progress: seriesProgress))
+                    {
+                        failureCount++;
+                        Debug.LogError(
+                            $"SimpleITKVolumeLoader: failed to segment DICOM series '{seriesName}': {segmentationError}");
+                        continue;
+                    }
+
+                    ReportSegmentationGenerationProgress(
+                        seriesProgressBase + (seriesProgressSpan * 0.85f),
+                        $"[{i + 1}/{dicomSeries.Count}] Saving {seriesName}...");
+
+                    var outputPath = BuildSegmentedOutputPath(segmentedDirectory, seriesName);
+                    if (!SimpleITKNative.TryWriteLabelVolumeUInt8(outputPath, segmentationData, useCompression: true, out var writeError))
+                    {
+                        failureCount++;
+                        Debug.LogError(
+                            $"SimpleITKVolumeLoader: failed to write segmentation '{outputPath}': {writeError}");
+                        continue;
+                    }
+
+                    successCount++;
+                    lastOutputPath = outputPath;
+                    lastSummary = segmentationSummary;
+                    Debug.Log(
+                        $"SimpleITKVolumeLoader: generated segmentation '{outputPath}'. {segmentationSummary}");
+                }
+
+                if (successCount == 0)
+                {
+                    Debug.LogError(
+                        $"SimpleITKVolumeLoader: DICOM batch segmentation finished with no successes " +
+                        $"(failures={failureCount}).");
+                    return;
+                }
+
+                ReportSegmentationGenerationProgress(0.92f, "Assigning last generated segmentation...");
+                if (!string.IsNullOrWhiteSpace(lastOutputPath) &&
+                    !TryAssignSegmentationSampleFileName(lastOutputPath, out var assignError))
                 {
                     Debug.LogWarning(
-                        $"SimpleITKVolumeLoader: segmentation file was generated but not assigned automatically: {assignError}");
+                        $"SimpleITKVolumeLoader: segmentation files were generated but not assigned automatically: {assignError}");
                 }
 
-                _lastGeneratedSegmentationPath = outputPath;
+                _lastGeneratedSegmentationPath = lastOutputPath ?? string.Empty;
                 EditorUtility.SetDirty(this);
 
-                ReportSegmentationGenerationProgress(0.94f, "Refreshing assets...");
+                ReportSegmentationGenerationProgress(0.95f, "Refreshing assets...");
                 AssetDatabase.Refresh();
 
-                ReportSegmentationGenerationProgress(0.98f, "Applying generated segmentation...");
+                ReportSegmentationGenerationProgress(0.98f, "Applying last generated segmentation...");
                 if (targetRenderer != null && targetRenderer.GetVolumeTexture() != null)
                 {
                     ApplyConfiguredSegmentationAfterVolumeLoad(logFailures: true);
                 }
-                else if (targetRenderer != null)
-                {
-                    LoadVolume();
-                }
 
                 ReportSegmentationGenerationProgress(1.0f, "Done.");
-                Debug.Log($"SimpleITKVolumeLoader: generated segmentation volume '{outputPath}'. {segmentationSummary}");
+                Debug.Log(
+                    $"SimpleITKVolumeLoader: DICOM batch segmentation complete. " +
+                    $"successes={successCount}, failures={failureCount}, outputDir='{segmentedDirectory}'. {lastSummary}");
             }
             finally
             {
@@ -674,14 +773,14 @@ namespace SimpleITKUnity
             return null;
         }
 
-        private BratsSentisInference ResolveSegmentationInference()
+        private SegmentationInferenceBehaviour ResolveSegmentationInference()
         {
             if (segmentationInference != null)
             {
                 return segmentationInference;
             }
 
-            segmentationInference = GetComponent<BratsSentisInference>();
+            segmentationInference = GetComponent<SegmentationInferenceBehaviour>();
             if (segmentationInference != null)
             {
                 return segmentationInference;
@@ -690,7 +789,7 @@ namespace SimpleITKUnity
             var current = transform;
             while (current != null)
             {
-                segmentationInference = current.GetComponentInChildren<BratsSentisInference>(true);
+                segmentationInference = current.GetComponentInChildren<SegmentationInferenceBehaviour>(true);
                 if (segmentationInference != null)
                 {
                     return segmentationInference;
@@ -780,12 +879,35 @@ namespace SimpleITKUnity
 
         private string ResolveSegmentationPath()
         {
+            if (TryResolveMatchingSegmentedPathForCurrentSample(out var matchedSegmentedPath))
+            {
+                return matchedSegmentedPath;
+            }
+
             if (string.IsNullOrWhiteSpace(segmentationSampleFileName))
             {
                 return string.Empty;
             }
 
-            var samplePath = CombinePathPreservingUri(GetSampleDirectoryPath(), segmentationSampleFileName);
+            var normalizedEntry = segmentationSampleFileName.Replace('\\', '/').Trim().TrimStart('/');
+            var fileName = Path.GetFileName(normalizedEntry);
+
+            // Prefer StreamingAssets/Segmented for generated DICOM batch outputs.
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                var segmentedPath = CombinePathPreservingUri(GetSegmentedDirectoryPath(), fileName);
+                if (!IsRemotePath(segmentedPath) && PathExists(segmentedPath))
+                {
+                    return Path.GetFullPath(segmentedPath);
+                }
+
+                if (IsRemotePath(segmentedPath))
+                {
+                    return segmentedPath;
+                }
+            }
+
+            var samplePath = CombinePathPreservingUri(GetSampleDirectoryPath(), normalizedEntry);
             if (IsRemotePath(samplePath))
             {
                 return samplePath;
@@ -814,6 +936,11 @@ namespace SimpleITKUnity
 
         private bool ShouldLoadConfiguredSegmentation()
         {
+            if (TryResolveMatchingSegmentedPathForCurrentSample(out _))
+            {
+                return true;
+            }
+
             return !string.IsNullOrWhiteSpace(segmentationSampleFileName);
         }
 
@@ -827,6 +954,72 @@ namespace SimpleITKUnity
             return TryResolveSegmentationPath(out var resolvedPath, out _)
                 ? resolvedPath
                 : string.Empty;
+        }
+
+        /// <summary>
+        /// Assigns matching {stem}_seg.nrrd and a color map for the selected sample.
+        /// </summary>
+        private void AssignSegmentationSourceForSample(string sampleEntry)
+        {
+            segmentationSampleFileName = BuildMatchingSegmentationSampleFileName(sampleEntry);
+            segmentationColorMapFileName = ResolveSegmentationColorMapFileNameForSample(sampleEntry);
+        }
+
+        /// <summary>
+        /// Builds {sampleStem}_seg.nrrd for a selected sample (DICOM folder name or volume file stem).
+        /// DICOM folders keep dots in the name (e.g. 20220714.CTA_source_seg.nrrd).
+        /// </summary>
+        private static string BuildMatchingSegmentationSampleFileName(string sampleEntry)
+        {
+            var sampleStem = SimpleITKPathUtility.GetSampleSegmentationStem(sampleEntry);
+            return string.IsNullOrWhiteSpace(sampleStem)
+                ? string.Empty
+                : $"{sampleStem}_seg.nrrd";
+        }
+
+        /// <summary>
+        /// BraTS samples use the BraTS palette; DICOM/UNet and other samples use UnetBrain.
+        /// </summary>
+        private static string ResolveSegmentationColorMapFileNameForSample(string sampleEntry)
+        {
+            var normalizedSample = (sampleEntry ?? string.Empty).Replace('\\', '/').Trim().TrimStart('/');
+            var sampleLeaf = Path.GetFileName(normalizedSample.TrimEnd('/'));
+            if (!string.IsNullOrWhiteSpace(sampleLeaf) &&
+                sampleLeaf.IndexOf("brats", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "BraTSSegmentationColorMap.txt";
+            }
+
+            return "UnetBrainSegmentationColorMap.txt";
+        }
+
+        /// <summary>
+        /// Resolves StreamingAssets/Segmented/{sampleName}_seg.nrrd for the currently selected sample.
+        /// </summary>
+        private bool TryResolveMatchingSegmentedPathForCurrentSample(out string resolvedPath)
+        {
+            resolvedPath = string.Empty;
+
+            var segmentedFileName = BuildMatchingSegmentationSampleFileName(sampleFileName);
+            if (string.IsNullOrWhiteSpace(segmentedFileName))
+            {
+                return false;
+            }
+
+            var segmentedPath = CombinePathPreservingUri(GetSegmentedDirectoryPath(), segmentedFileName);
+            if (IsRemotePath(segmentedPath))
+            {
+                // Auto-match currently requires a local StreamingAssets filesystem path.
+                return false;
+            }
+
+            if (!File.Exists(segmentedPath))
+            {
+                return false;
+            }
+
+            resolvedPath = Path.GetFullPath(segmentedPath);
+            return true;
         }
 
 #if UNITY_EDITOR
@@ -868,12 +1061,129 @@ namespace SimpleITKUnity
 
         private string BuildGeneratedSegmentationOutputPath(string resolvedVolumePath)
         {
-            var normalizedSampleEntry = sampleFileName.Replace('\\', '/');
-            var relativeDirectory = Path.GetDirectoryName(normalizedSampleEntry)?.Replace('\\', '/') ?? string.Empty;
-            var outputFileName = $"{SimpleITKPathUtility.GetFileStem(resolvedVolumePath)}_seg.nrrd";
-            var relativeOutputPath = CombineRelativePath(relativeDirectory, outputFileName);
-            var outputPath = CombinePathPreservingUri(GetSampleDirectoryPath(), relativeOutputPath);
-            return Path.GetFullPath(outputPath);
+            var seriesName = Path.GetFileName(
+                resolvedVolumePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(seriesName))
+            {
+                seriesName = SimpleITKPathUtility.GetFileStem(resolvedVolumePath);
+            }
+
+            if (!TryEnsureSegmentedDirectory(out var segmentedDirectory, out _))
+            {
+                // Fall back to Sample for legacy single-volume callers if Segmented cannot be created.
+                var normalizedSampleEntry = (sampleFileName ?? string.Empty).Replace('\\', '/');
+                var relativeDirectory = Path.GetDirectoryName(normalizedSampleEntry)?.Replace('\\', '/') ?? string.Empty;
+                var legacyFileName = $"{seriesName}_seg.nrrd";
+                var relativeOutputPath = CombineRelativePath(relativeDirectory, legacyFileName);
+                return Path.GetFullPath(CombinePathPreservingUri(GetSampleDirectoryPath(), relativeOutputPath));
+            }
+
+            return BuildSegmentedOutputPath(segmentedDirectory, seriesName);
+        }
+
+        private static string BuildSegmentedOutputPath(string segmentedDirectory, string seriesName)
+        {
+            var safeName = string.IsNullOrWhiteSpace(seriesName) ? "volume" : seriesName.Trim();
+            var outputFileName = $"{safeName}_seg.nrrd";
+            return Path.GetFullPath(Path.Combine(segmentedDirectory, outputFileName));
+        }
+
+        private static bool TryEnsureSegmentedDirectory(out string segmentedDirectory, out string error)
+        {
+            segmentedDirectory = string.Empty;
+            error = string.Empty;
+
+            var candidate = GetSegmentedDirectoryPath();
+            if (IsRemotePath(candidate))
+            {
+                error = "StreamingAssets/Segmented is not a local filesystem path on this platform.";
+                return false;
+            }
+
+            segmentedDirectory = Path.GetFullPath(candidate);
+            try
+            {
+                if (!Directory.Exists(segmentedDirectory))
+                {
+                    Directory.CreateDirectory(segmentedDirectory);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to create StreamingAssets/Segmented directory '{segmentedDirectory}': {ex.Message}";
+                segmentedDirectory = string.Empty;
+                return false;
+            }
+        }
+
+        private static List<string> CollectDicomSeriesDirectoriesUnderSample()
+        {
+            var results = new List<string>();
+            var sampleDirectory = GetSampleDirectoryPath();
+            if (IsRemotePath(sampleDirectory) || !Directory.Exists(sampleDirectory))
+            {
+                return results;
+            }
+
+            foreach (var directoryPath in Directory.GetDirectories(sampleDirectory))
+            {
+                var directoryName = Path.GetFileName(directoryPath);
+                if (string.IsNullOrWhiteSpace(directoryName) ||
+                    directoryName.StartsWith(".", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!DirectoryContainsDicomFiles(directoryPath))
+                {
+                    continue;
+                }
+
+                results.Add(Path.GetFullPath(directoryPath));
+            }
+
+            results.Sort(StringComparer.OrdinalIgnoreCase);
+            return results;
+        }
+
+        private static bool DirectoryContainsDicomFiles(string directoryPath)
+        {
+            if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                foreach (var filePath in Directory.EnumerateFiles(directoryPath))
+                {
+                    if (IsDicomFileName(filePath))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool IsDicomFileName(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var extension = Path.GetExtension(path);
+            return string.Equals(extension, ".dcm", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".dicom", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".ima", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryAssignSegmentationSampleFileName(string outputPath, out string error)
@@ -886,6 +1196,20 @@ namespace SimpleITKUnity
                 return false;
             }
 
+            var fullOutputPath = Path.GetFullPath(outputPath);
+            var segmentedDirectory = GetSegmentedDirectoryPath();
+            if (!IsRemotePath(segmentedDirectory))
+            {
+                var fullSegmentedDirectory = Path.GetFullPath(segmentedDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (fullOutputPath.StartsWith(fullSegmentedDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(fullOutputPath, fullSegmentedDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    segmentationSampleFileName = Path.GetFileName(fullOutputPath).Replace('\\', '/');
+                    return true;
+                }
+            }
+
             var sampleDirectory = GetSampleDirectoryPath();
             if (IsRemotePath(sampleDirectory))
             {
@@ -895,12 +1219,12 @@ namespace SimpleITKUnity
 
             var fullSampleDirectory = Path.GetFullPath(sampleDirectory)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullOutputPath = Path.GetFullPath(outputPath);
 
             if (!fullOutputPath.StartsWith(fullSampleDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(fullOutputPath, fullSampleDirectory, StringComparison.OrdinalIgnoreCase))
             {
-                error = $"Generated segmentation path is outside StreamingAssets/Sample: {fullOutputPath}";
+                error =
+                    $"Generated segmentation path is outside StreamingAssets/Segmented and StreamingAssets/Sample: {fullOutputPath}";
                 return false;
             }
 
@@ -917,11 +1241,18 @@ namespace SimpleITKUnity
             resolvedPath = string.Empty;
             if (targetRenderer == null)
             {
+                LogSegmentationWarning(logFailures, "failed to resolve segmentation volume path", "targetRenderer is not assigned");
                 return false;
             }
 
             if (!ShouldLoadConfiguredSegmentation())
             {
+                LogSegmentationWarning(
+                    logFailures,
+                    "skipped segmentation overlay load",
+                    string.IsNullOrWhiteSpace(segmentationSampleFileName)
+                        ? "segmentationSampleFileName is empty and no matching Segmented/_seg.nrrd was found"
+                        : $"segmentationSampleFileName='{segmentationSampleFileName}' but no readable path was found");
                 ClearConfiguredSegmentation();
                 return false;
             }
@@ -946,6 +1277,11 @@ namespace SimpleITKUnity
 
             if (targetRenderer.TryLoadSegmentationVolume(resolvedPath, out var loadError))
             {
+                if (logFailures)
+                {
+                    Debug.Log($"SimpleITKVolumeLoader: applied segmentation overlay '{resolvedPath}'.");
+                }
+
                 return true;
             }
 
@@ -1487,6 +1823,11 @@ namespace SimpleITKUnity
         private static string GetSampleDirectoryPath()
         {
             return CombinePathPreservingUri(Application.streamingAssetsPath, "Sample");
+        }
+
+        private static string GetSegmentedDirectoryPath()
+        {
+            return CombinePathPreservingUri(Application.streamingAssetsPath, "Segmented");
         }
 
         private static bool PathExists(string path)

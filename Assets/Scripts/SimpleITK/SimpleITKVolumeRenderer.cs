@@ -74,7 +74,17 @@ namespace SimpleITKUnity
             out Color[] colors,
             out string error)
         {
+            return TryLoadPaletteFromStreamingAssets(fileName, out colors, out _, out error);
+        }
+
+        public static bool TryLoadPaletteFromStreamingAssets(
+            string fileName,
+            out Color[] colors,
+            out string[] names,
+            out string error)
+        {
             colors = null;
+            names = null;
 
             if (!TryResolveStreamingAssetsPath(fileName, out var resolvedPath, out error))
             {
@@ -89,6 +99,7 @@ namespace SimpleITKUnity
 
             var lines = File.ReadAllLines(resolvedPath);
             colors = CreateEmptyPalette();
+            names = CreateEmptyNames();
             var appliedCount = 0;
 
             for (var i = 0; i < lines.Length; ++i)
@@ -101,13 +112,14 @@ namespace SimpleITKUnity
                     continue;
                 }
 
-                if (!TryParseEntry(line, out var label, out _, out var color, out error))
+                if (!TryParseEntry(line, out var label, out var displayName, out var color, out error))
                 {
                     error = $"{resolvedPath}:{i + 1}: {error}";
                     return false;
                 }
 
                 colors[label] = color;
+                names[label] = displayName;
                 appliedCount++;
             }
 
@@ -115,11 +127,32 @@ namespace SimpleITKUnity
             {
                 error = $"segmentation color map file contains no valid entries: {resolvedPath}";
                 colors = null;
+                names = null;
                 return false;
             }
 
             error = string.Empty;
             return true;
+        }
+
+        public static string[] CreateDefaultNames()
+        {
+            var names = CreateEmptyNames();
+            names[1] = "Tumor Core";
+            names[2] = "Whole Tumor";
+            names[4] = "Enhancing Tumor";
+            return names;
+        }
+
+        private static string[] CreateEmptyNames()
+        {
+            var names = new string[PaletteSize];
+            for (var i = 0; i < names.Length; ++i)
+            {
+                names[i] = string.Empty;
+            }
+
+            return names;
         }
 
         public static Color[] CreateDefaultPalette()
@@ -392,6 +425,11 @@ namespace SimpleITKUnity
         [SerializeField, HideInInspector] private float loadedSourceMin = 0.0f;
         [SerializeField, HideInInspector] private float loadedSourceMax = 1.0f;
         private string _segmentationSourcePath = string.Empty;
+        private byte _segmentationLabelMaximum;
+        private readonly Color[] _segmentationBasePalette = new Color[SegmentationPaletteSize];
+        private readonly string[] _segmentationLabelNames = new string[SegmentationPaletteSize];
+        private readonly bool[] _segmentationLabelVisibility = new bool[SegmentationPaletteSize];
+        private bool _segmentationLabelVisibilityInitialized;
 
         private bool _transfer1DDirty = true;
         private bool _transfer2DDirty = true;
@@ -806,14 +844,154 @@ namespace SimpleITKUnity
             return _segmentationColorMapTexture;
         }
 
+        public byte GetSegmentationLabelMaximum()
+        {
+            return _segmentationLabelMaximum;
+        }
+
+        public bool TryGetSegmentationLabelName(byte label, out string displayName)
+        {
+            EnsureSegmentationColorMapTexture();
+            displayName = string.Empty;
+            if (label == 0 || label >= SegmentationPaletteSize)
+            {
+                return false;
+            }
+
+            var hasName = !string.IsNullOrWhiteSpace(_segmentationLabelNames[label]);
+            var hasColor = _segmentationBasePalette[label].a > 0f;
+            var inSegmentation = _segmentationLabelMaximum > 0 && label <= _segmentationLabelMaximum;
+            if (!hasName && !hasColor && !inSegmentation)
+            {
+                return false;
+            }
+
+            displayName = hasName ? _segmentationLabelNames[label] : $"Label {label}";
+            return true;
+        }
+
+        public IReadOnlyList<(byte label, string name, bool visible)> GetSegmentationLabelEntries()
+        {
+            EnsureSegmentationColorMapTexture();
+            var entries = new List<(byte label, string name, bool visible)>();
+            var paletteDefinesLabels = false;
+            for (var label = 1; label < SegmentationPaletteSize; ++label)
+            {
+                if (_segmentationBasePalette[label].a > 0f ||
+                    !string.IsNullOrWhiteSpace(_segmentationLabelNames[label]))
+                {
+                    paletteDefinesLabels = true;
+                    break;
+                }
+            }
+
+            for (var label = 1; label < SegmentationPaletteSize; ++label)
+            {
+                var hasColor = _segmentationBasePalette[label].a > 0f;
+                var hasName = !string.IsNullOrWhiteSpace(_segmentationLabelNames[label]);
+                var inSegmentation = _segmentationLabelMaximum > 0 && label <= _segmentationLabelMaximum;
+                if (hasColor || hasName)
+                {
+                    var named = hasName ? _segmentationLabelNames[label] : $"Label {label}";
+                    entries.Add(((byte)label, named, GetLabelVisible((byte)label)));
+                    continue;
+                }
+
+                if (!paletteDefinesLabels && inSegmentation)
+                {
+                    entries.Add(((byte)label, $"Label {label}", GetLabelVisible((byte)label)));
+                }
+            }
+
+            return entries;
+        }
+
+        public bool GetLabelVisible(byte label)
+        {
+            EnsureLabelVisibilityInitialized();
+            if (label >= SegmentationPaletteSize)
+            {
+                return false;
+            }
+
+            return _segmentationLabelVisibility[label];
+        }
+
+        public void SetLabelVisible(byte label, bool visible)
+        {
+            EnsureLabelVisibilityInitialized();
+            if (label == 0 || label >= SegmentationPaletteSize)
+            {
+                return;
+            }
+
+            if (_segmentationLabelVisibility[label] == visible)
+            {
+                return;
+            }
+
+            _segmentationLabelVisibility[label] = visible;
+            _segmentationColorMapDirty = true;
+            _materialDirty = true;
+            MarkSliceMaterialDirty();
+        }
+
+        public void SetAllLabelsVisible(bool visible)
+        {
+            EnsureLabelVisibilityInitialized();
+            var changed = false;
+            for (var label = 1; label < SegmentationPaletteSize; ++label)
+            {
+                if (_segmentationLabelVisibility[label] == visible)
+                {
+                    continue;
+                }
+
+                _segmentationLabelVisibility[label] = visible;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            _segmentationColorMapDirty = true;
+            _materialDirty = true;
+            MarkSliceMaterialDirty();
+        }
+
         public bool GetShowSegmentationOverlayInAbc()
         {
             return showSegmentationOverlayInAbc;
         }
 
+        public void SetShowSegmentationOverlayInAbc(bool show)
+        {
+            if (showSegmentationOverlayInAbc == show)
+            {
+                return;
+            }
+
+            showSegmentationOverlayInAbc = show;
+            MarkSliceMaterialDirty();
+        }
+
         public float GetSegmentationOverlayOpacityInAbc()
         {
             return segmentationOverlayOpacityInAbc;
+        }
+
+        public void SetSegmentationOverlayOpacityInAbc(float opacity)
+        {
+            var clamped = Mathf.Clamp01(opacity);
+            if (Mathf.Approximately(segmentationOverlayOpacityInAbc, clamped))
+            {
+                return;
+            }
+
+            segmentationOverlayOpacityInAbc = clamped;
+            MarkSliceMaterialDirty();
         }
 
         public string GetLegacySegmentationColorMapFileName()
@@ -1102,7 +1280,9 @@ namespace SimpleITKUnity
         {
             DestroyTexture(ref _segmentationTexture);
             _segmentationSourcePath = string.Empty;
+            _segmentationLabelMaximum = 0;
             _materialDirty = true;
+            MarkSliceMaterialDirty();
         }
 
         public Texture2D GetSliceTransferTexture1D()
@@ -1685,9 +1865,12 @@ namespace SimpleITKUnity
             _segmentationTexture.filterMode = FilterMode.Point;
             _segmentationTexture.SetPixelData(volumeData.Voxels, 0);
             _segmentationTexture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+            _segmentationLabelMaximum = volumeData.LabelMaximum;
             volumeData.ConsumeVoxels();
 
             _segmentationSourcePath = sourcePathOrLabel ?? string.Empty;
+            EnsureLabelVisibilityInitialized();
+            _segmentationColorMapDirty = true;
             _materialDirty = true;
             MarkSliceMaterialDirty();
             return true;
@@ -2243,6 +2426,7 @@ namespace SimpleITKUnity
         private void EnsureSegmentationColorMapTexture()
         {
             EnsureDefaultSegmentationColorMapFileName();
+            EnsureLabelVisibilityInitialized();
             RefreshSegmentationColorMapDirtyFlag();
 
             if (_segmentationColorMapTexture == null || _segmentationColorMapTexture.width != SegmentationPaletteSize)
@@ -2266,13 +2450,16 @@ namespace SimpleITKUnity
             }
 
             Color[] colors;
+            string[] names;
             var configuredColorMapFileName = GetConfiguredSegmentationColorMapFileName();
             if (!SimpleITKSegmentationColorMap.TryLoadPaletteFromStreamingAssets(
                     configuredColorMapFileName,
                     out colors,
+                    out names,
                     out var loadError))
             {
                 colors = SimpleITKSegmentationColorMap.CreateDefaultPalette();
+                names = SimpleITKSegmentationColorMap.CreateDefaultNames();
                 if (!string.Equals(_lastSegmentationColorMapError, loadError, StringComparison.Ordinal))
                 {
                     Debug.LogWarning(
@@ -2287,9 +2474,46 @@ namespace SimpleITKUnity
                 _lastSegmentationColorMapError = string.Empty;
             }
 
-            _segmentationColorMapTexture.SetPixels(colors);
+            for (var i = 0; i < SegmentationPaletteSize; ++i)
+            {
+                _segmentationBasePalette[i] = colors[i];
+                _segmentationLabelNames[i] = names != null && i < names.Length
+                    ? (names[i] ?? string.Empty)
+                    : string.Empty;
+            }
+
+            var visibleColors = new Color[SegmentationPaletteSize];
+            for (var i = 0; i < SegmentationPaletteSize; ++i)
+            {
+                var color = _segmentationBasePalette[i];
+                if (i == 0 || !_segmentationLabelVisibility[i])
+                {
+                    color.a = 0f;
+                }
+
+                visibleColors[i] = color;
+            }
+
+            _segmentationColorMapTexture.SetPixels(visibleColors);
             _segmentationColorMapTexture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
             _segmentationColorMapDirty = false;
+            MarkSliceMaterialDirty();
+        }
+
+        private void EnsureLabelVisibilityInitialized()
+        {
+            if (_segmentationLabelVisibilityInitialized)
+            {
+                return;
+            }
+
+            _segmentationLabelVisibility[0] = false;
+            for (var i = 1; i < SegmentationPaletteSize; ++i)
+            {
+                _segmentationLabelVisibility[i] = true;
+            }
+
+            _segmentationLabelVisibilityInitialized = true;
         }
 
         private void EnsureDefaultSegmentationColorMapFileName()

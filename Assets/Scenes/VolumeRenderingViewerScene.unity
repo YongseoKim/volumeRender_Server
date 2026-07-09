@@ -167,9 +167,9 @@ MonoBehaviour:
   processingController: {fileID: 1389359936}
   viewController: {fileID: 1217221017}
   sampleFileName: 
-  segmentationSampleFileName: 
-  segmentationColorMapFileName: BraTSSegmentationColorMap.txt
-  segmentationInference: {fileID: 1917301989}
+  segmentationSampleFileName: DICOM_MRI_TOF_seg.nrrd
+  segmentationColorMapFileName: UnetBrainSegmentationColorMap.txt
+  segmentationInference: {fileID: 1987654322}
   loadedWidth: 512
   loadedHeight: 512
   loadedDepth: 200
@@ -179,7 +179,7 @@ MonoBehaviour:
   _lastEditorAutoLoadPath: C:\Users\user\Desktop\volumeRender_Test1\Assets\StreamingAssets\Sample\501
     3D_T1_ AX Gadovist.nrrd
   _lastEditorAutoLoadSegmentationPath: 
-  _lastGeneratedSegmentationPath: 
+  _lastGeneratedSegmentationPath: C:\Users\user\Desktop\volumeRender_Server\Assets\StreamingAssets\Segmented\DICOM_MRI_TOF_seg.nrrd
   _importedLegacySettings: 1
 --- !u!1 &45563523
 GameObject:
@@ -493,7 +493,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 1315106475}
+  m_Texture: {fileID: 908989982}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -522,6 +522,43 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.SimpleITKPaneClickDebugProbe
   controller: {fileID: 1217221017}
   pane: 0
+--- !u!84 &94826233
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: MPR_RT_B
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 400
+  m_Height: 400
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 94
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 1
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &97980967
 GameObject:
   m_ObjectHideFlags: 0
@@ -1102,7 +1139,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 3825205247
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 1990330134}
+  m_TargetTexture: {fileID: 351165738}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 1
@@ -1281,6 +1318,43 @@ RectTransform:
   m_CorrespondingSourceObject: {fileID: 6867048773644577900, guid: 85d2fbea8c1bfcf468345285518f377f, type: 3}
   m_PrefabInstance: {fileID: 346977689}
   m_PrefabAsset: {fileID: 0}
+--- !u!84 &351165738
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: MPR_RT_3D
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 400
+  m_Height: 400
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 94
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 1
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &356533539
 GameObject:
   m_ObjectHideFlags: 0
@@ -1721,43 +1795,6 @@ RectTransform:
   m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 320, y: 0}
   m_Pivot: {x: 0.5, y: 0.5}
---- !u!84 &439434978
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: MPR_RT_C
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 400
-  m_Height: 400
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 94
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 1
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &440528913
 GameObject:
   m_ObjectHideFlags: 0
@@ -2435,7 +2472,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 439434978}
+  m_Texture: {fileID: 668760506}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -2464,43 +2501,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.SimpleITKPaneClickDebugProbe
   controller: {fileID: 1217221017}
   pane: 2
---- !u!84 &583488028
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: MPR_RT_B
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 400
-  m_Height: 400
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 94
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 1
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &604512656
 GameObject:
   m_ObjectHideFlags: 0
@@ -2795,6 +2795,43 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 657625032}
   m_CullTransparentMesh: 1
+--- !u!84 &668760506
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: MPR_RT_C
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 400
+  m_Height: 400
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 94
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 1
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &698310738
 GameObject:
   m_ObjectHideFlags: 0
@@ -3863,6 +3900,43 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 901394808}
   m_CullTransparentMesh: 1
+--- !u!84 &908989982
+RenderTexture:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: MPR_RT_A
+  m_ImageContentsHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_IsAlphaChannelOptional: 0
+  serializedVersion: 6
+  m_Width: 400
+  m_Height: 400
+  m_AntiAliasing: 1
+  m_MipCount: -1
+  m_DepthStencilFormat: 94
+  m_ColorFormat: 4
+  m_MipMap: 0
+  m_GenerateMips: 0
+  m_SRGB: 1
+  m_UseDynamicScale: 0
+  m_UseDynamicScaleExplicit: 0
+  m_BindMS: 0
+  m_EnableCompatibleFormat: 1
+  m_EnableRandomWrite: 0
+  m_TextureSettings:
+    serializedVersion: 2
+    m_FilterMode: 1
+    m_Aniso: 1
+    m_MipBias: 0
+    m_WrapU: 1
+    m_WrapV: 1
+    m_WrapW: 1
+  m_Dimension: 2
+  m_VolumeDepth: 1
+  m_ShadowSamplingMode: 2
 --- !u!1 &911758744
 GameObject:
   m_ObjectHideFlags: 0
@@ -3981,7 +4055,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 67108864
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 1315106475}
+  m_TargetTexture: {fileID: 908989982}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 1
@@ -4490,6 +4564,8 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1917301988}
+  - {fileID: 1216365925}
+  - {fileID: 1987654321}
   m_Father: {fileID: 1351340637}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1064443935
@@ -5221,6 +5297,56 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1196545270}
   m_CullTransparentMesh: 1
+--- !u!1 &1216365923
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1216365925}
+  - component: {fileID: 1216365924}
+  m_Layer: 0
+  m_Name: SpleenModel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1216365924
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1216365923}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 00808a88c13c8a846970e991302503b6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.SpleenSentisInference
+  modelAsset: {fileID: 5022602860645237092, guid: 74d0da6e31f4b374192587fd8802a457, type: 3}
+  backendPreference: 1
+  foregroundThreshold: 0.5
+  overlapDivisor: 2
+  useSlidingWindow: 1
+  lastRunSummary: 
+--- !u!4 &1216365925
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1216365923}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1042834027}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1217221015
 GameObject:
   m_ObjectHideFlags: 0
@@ -6023,43 +6149,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1307004251}
   m_CullTransparentMesh: 1
---- !u!84 &1315106475
-RenderTexture:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_Name: MPR_RT_A
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
-  serializedVersion: 6
-  m_Width: 400
-  m_Height: 400
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 94
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 1
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
 --- !u!1 &1351340636
 GameObject:
   m_ObjectHideFlags: 0
@@ -6840,7 +6929,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 583488028}
+  m_Texture: {fileID: 94826233}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -8063,7 +8152,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Texture: {fileID: 1990330134}
+  m_Texture: {fileID: 351165738}
   m_UVRect:
     serializedVersion: 2
     x: 0
@@ -9048,8 +9137,8 @@ MonoBehaviour:
   _lastAppliedVolumeColorPreset: 0
   _lastAppliedSliceTransferFunctionPresetName: Grayscale
   _lastAppliedSliceColorPreset: 0
-  _lastSegmentationColorMapPath: C:\Users\user\Desktop\volumeRender_Server\Assets\StreamingAssets\BraTSSegmentationColorMap.txt
-  _lastSegmentationColorMapWriteTimeUtcTicks: 639171086994833649
+  _lastSegmentationColorMapPath: C:\Users\user\Desktop\volumeRender_Server\Assets\StreamingAssets\UnetBrainSegmentationColorMap.txt
+  _lastSegmentationColorMapWriteTimeUtcTicks: 639191517141343814
   _lastSegmentationColorMapError: 
 --- !u!23 &1814410281
 MeshRenderer:
@@ -9183,7 +9272,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1917301987}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ede2c6103b2d243c5a15f1a1512e137f, type: 3}
   m_Name: 
@@ -9407,43 +9496,176 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1953383006}
   m_CullTransparentMesh: 1
---- !u!84 &1990330134
-RenderTexture:
+--- !u!1 &1987654320
+GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: MPR_RT_3D
-  m_ImageContentsHash:
-    serializedVersion: 2
-    Hash: 00000000000000000000000000000000
-  m_IsAlphaChannelOptional: 0
   serializedVersion: 6
-  m_Width: 400
-  m_Height: 400
-  m_AntiAliasing: 1
-  m_MipCount: -1
-  m_DepthStencilFormat: 94
-  m_ColorFormat: 4
-  m_MipMap: 0
-  m_GenerateMips: 0
-  m_SRGB: 1
-  m_UseDynamicScale: 0
-  m_UseDynamicScaleExplicit: 0
-  m_BindMS: 0
-  m_EnableCompatibleFormat: 1
-  m_EnableRandomWrite: 0
-  m_TextureSettings:
-    serializedVersion: 2
-    m_FilterMode: 1
-    m_Aniso: 1
-    m_MipBias: 0
-    m_WrapU: 1
-    m_WrapV: 1
-    m_WrapW: 1
-  m_Dimension: 2
-  m_VolumeDepth: 1
-  m_ShadowSamplingMode: 2
+  m_Component:
+  - component: {fileID: 1987654321}
+  - component: {fileID: 1987654322}
+  m_Layer: 0
+  m_Name: UnetBrainSegmentationModel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1987654321
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654320}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1042834027}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1987654322
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654320}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a8c4e2f91b7d4e6a9f3c5d8e1a2b4c6d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.UnetBrainSentisInference
+  modelAsset: {fileID: 5022602860645237092, guid: 79f21ee87e154cf4591a63de5f3363b2, type: 3}
+  backendPreference: 2
+  foregroundThreshold: 0.5
+  normalizationMode: 0
+  lastRunSummary: backend=CPU, requested=CPU, input=(512, 512, 172), slice=128x128,
+    norm=SliceNonZeroZScore, elapsedMs=6252.1, labels<=0
+--- !u!1 &1987654330
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1987654331}
+  - component: {fileID: 1987654332}
+  - component: {fileID: 1987654333}
+  - component: {fileID: 1987654334}
+  - component: {fileID: 1987654335}
+  m_Layer: 5
+  m_Name: SegmentationLabelToggles
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1987654331
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654330}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2147294288}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -20, y: -20}
+  m_SizeDelta: {x: 240, y: 160}
+  m_Pivot: {x: 1, y: 1}
+--- !u!114 &1987654332
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654330}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 59f8146938fff824cb5fd77236b75775, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.VerticalLayoutGroup
+  m_Padding:
+    m_Left: 8
+    m_Right: 8
+    m_Top: 8
+    m_Bottom: 8
+  m_ChildAlignment: 0
+  m_Spacing: 4
+  m_ChildForceExpandWidth: 1
+  m_ChildForceExpandHeight: 0
+  m_ChildControlWidth: 1
+  m_ChildControlHeight: 0
+  m_ChildScaleWidth: 0
+  m_ChildScaleHeight: 0
+  m_ReverseArrangement: 0
+--- !u!114 &1987654333
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654330}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
+  m_Material: {fileID: 0}
+  m_Color: {r: 0, g: 0, b: 0, a: 0.55}
+  m_RaycastTarget: 1
+  m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
+  m_Maskable: 1
+  m_OnCullStateChanged:
+    m_PersistentCalls:
+      m_Calls: []
+  m_Sprite: {fileID: 0}
+  m_Type: 0
+  m_PreserveAspect: 0
+  m_FillCenter: 1
+  m_FillMethod: 4
+  m_FillAmount: 1
+  m_FillClockwise: 1
+  m_FillOrigin: 0
+  m_UseSpriteMesh: 0
+  m_PixelsPerUnitMultiplier: 1
+--- !u!114 &1987654334
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654330}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b7e4c1a92d8f4b6e8a0c3d5f7e9a1b2c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.SegmentationLabelToggleUI
+  targetRenderer: {fileID: 1814410280}
+  contentRoot: {fileID: 1987654331}
+  togglePrefab: {fileID: 0}
+  hideWhenNoSegmentation: 1
+  refreshIntervalSeconds: 0.5
+--- !u!222 &1987654335
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1987654330}
+  m_CullTransparentMesh: 1
 --- !u!1 &2002883114
 GameObject:
   m_ObjectHideFlags: 0
@@ -9598,7 +9820,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 268435456
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 439434978}
+  m_TargetTexture: {fileID: 668760506}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 1
@@ -10346,7 +10568,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 134217728
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 583488028}
+  m_TargetTexture: {fileID: 94826233}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 1
@@ -10491,6 +10713,7 @@ RectTransform:
   - {fileID: 1265556897}
   - {fileID: 604512657}
   - {fileID: 1756030321}
+  - {fileID: 1987654331}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}

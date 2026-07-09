@@ -1,0 +1,2 @@
+# Format: label,name,(r,g,b) or label,name,(r,g,b,a)
+1,BrainSeg,(64,180,255,160)
