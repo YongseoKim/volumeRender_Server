@@ -587,7 +587,7 @@ namespace SimpleITKUnity
 
             try
             {
-                ReportSegmentationGenerationProgress(0.02f, "Scanning Sample DICOM series...");
+                ReportSegmentationGenerationProgress(0.02f, "Scanning Sample volumes (DICOM / NRRD / MHA)...");
                 ResolveTargets();
 
                 if (segmentationInference == null)
@@ -601,12 +601,12 @@ namespace SimpleITKUnity
                     return;
                 }
 
-                var dicomSeries = CollectDicomSeriesDirectoriesUnderSample();
-                if (dicomSeries.Count == 0)
+                var sourcePaths = CollectSegmentationSourcePathsUnderSample();
+                if (sourcePaths.Count == 0)
                 {
                     Debug.LogError(
-                        "SimpleITKVolumeLoader: no DICOM series folders found under StreamingAssets/Sample. " +
-                        "Expected top-level folders that contain .dcm/.dicom/.ima files.");
+                        "SimpleITKVolumeLoader: no segmentable volumes found under StreamingAssets/Sample. " +
+                        "Expected top-level DICOM series folders (.dcm/.dicom/.ima) or volume files (.nrrd/.mha).");
                     return;
                 }
 
@@ -621,16 +621,23 @@ namespace SimpleITKUnity
                 string lastOutputPath = null;
                 string lastSummary = string.Empty;
 
-                for (var i = 0; i < dicomSeries.Count; ++i)
+                for (var i = 0; i < sourcePaths.Count; ++i)
                 {
-                    var seriesDirectory = dicomSeries[i];
-                    var seriesName = Path.GetFileName(seriesDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-                    var seriesProgressBase = (float)i / dicomSeries.Count;
-                    var seriesProgressSpan = 1f / dicomSeries.Count;
+                    var sourcePath = sourcePaths[i];
+                    var sourceLeaf = Path.GetFileName(
+                        sourcePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    var sourceStem = SimpleITKPathUtility.GetSampleSegmentationStem(sourceLeaf);
+                    if (string.IsNullOrWhiteSpace(sourceStem))
+                    {
+                        sourceStem = sourceLeaf;
+                    }
+
+                    var seriesProgressBase = (float)i / sourcePaths.Count;
+                    var seriesProgressSpan = 1f / sourcePaths.Count;
 
                     ReportSegmentationGenerationProgress(
                         seriesProgressBase + (seriesProgressSpan * 0.05f),
-                        $"[{i + 1}/{dicomSeries.Count}] Inferring {seriesName}...");
+                        $"[{i + 1}/{sourcePaths.Count}] Inferring {sourceLeaf}...");
 
                     Action<float, string> seriesProgress = (progress, status) =>
                     {
@@ -638,11 +645,11 @@ namespace SimpleITKUnity
                         var mapped = seriesProgressBase + (seriesProgressSpan * (0.05f + (clamped * 0.75f)));
                         ReportSegmentationGenerationProgress(
                             mapped,
-                            $"[{i + 1}/{dicomSeries.Count}] {seriesName}: {status}");
+                            $"[{i + 1}/{sourcePaths.Count}] {sourceLeaf}: {status}");
                     };
 
                     if (!segmentationInference.TryPrepareSegmentationForVolume(
-                            seriesDirectory,
+                            sourcePath,
                             out var segmentationData,
                             out var segmentationSummary,
                             out var segmentationError,
@@ -651,15 +658,15 @@ namespace SimpleITKUnity
                     {
                         failureCount++;
                         Debug.LogError(
-                            $"SimpleITKVolumeLoader: failed to segment DICOM series '{seriesName}': {segmentationError}");
+                            $"SimpleITKVolumeLoader: failed to segment '{sourceLeaf}': {segmentationError}");
                         continue;
                     }
 
                     ReportSegmentationGenerationProgress(
                         seriesProgressBase + (seriesProgressSpan * 0.85f),
-                        $"[{i + 1}/{dicomSeries.Count}] Saving {seriesName}...");
+                        $"[{i + 1}/{sourcePaths.Count}] Saving {sourceLeaf}...");
 
-                    var outputPath = BuildSegmentedOutputPath(segmentedDirectory, seriesName);
+                    var outputPath = BuildSegmentedOutputPath(segmentedDirectory, sourceStem);
                     if (!SimpleITKNative.TryWriteLabelVolumeUInt8(outputPath, segmentationData, useCompression: true, out var writeError))
                     {
                         failureCount++;
@@ -678,7 +685,7 @@ namespace SimpleITKUnity
                 if (successCount == 0)
                 {
                     Debug.LogError(
-                        $"SimpleITKVolumeLoader: DICOM batch segmentation finished with no successes " +
+                        $"SimpleITKVolumeLoader: batch segmentation finished with no successes " +
                         $"(failures={failureCount}).");
                     return;
                 }
@@ -705,7 +712,7 @@ namespace SimpleITKUnity
 
                 ReportSegmentationGenerationProgress(1.0f, "Done.");
                 Debug.Log(
-                    $"SimpleITKVolumeLoader: DICOM batch segmentation complete. " +
+                    $"SimpleITKVolumeLoader: batch segmentation complete. " +
                     $"successes={successCount}, failures={failureCount}, outputDir='{segmentedDirectory}'. {lastSummary}");
             }
             finally
@@ -1061,11 +1068,16 @@ namespace SimpleITKUnity
 
         private string BuildGeneratedSegmentationOutputPath(string resolvedVolumePath)
         {
-            var seriesName = Path.GetFileName(
-                resolvedVolumePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            var seriesName = SimpleITKPathUtility.GetSampleSegmentationStem(resolvedVolumePath);
             if (string.IsNullOrWhiteSpace(seriesName))
             {
-                seriesName = SimpleITKPathUtility.GetFileStem(resolvedVolumePath);
+                seriesName = Path.GetFileName(
+                    resolvedVolumePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            }
+
+            if (string.IsNullOrWhiteSpace(seriesName))
+            {
+                seriesName = "volume";
             }
 
             if (!TryEnsureSegmentedDirectory(out var segmentedDirectory, out _))
@@ -1083,7 +1095,12 @@ namespace SimpleITKUnity
 
         private static string BuildSegmentedOutputPath(string segmentedDirectory, string seriesName)
         {
-            var safeName = string.IsNullOrWhiteSpace(seriesName) ? "volume" : seriesName.Trim();
+            var safeName = SimpleITKPathUtility.GetSampleSegmentationStem(seriesName);
+            if (string.IsNullOrWhiteSpace(safeName))
+            {
+                safeName = string.IsNullOrWhiteSpace(seriesName) ? "volume" : seriesName.Trim();
+            }
+
             var outputFileName = $"{safeName}_seg.nrrd";
             return Path.GetFullPath(Path.Combine(segmentedDirectory, outputFileName));
         }
@@ -1118,7 +1135,10 @@ namespace SimpleITKUnity
             }
         }
 
-        private static List<string> CollectDicomSeriesDirectoriesUnderSample()
+        /// <summary>
+        /// Collects top-level DICOM series folders and volume files (.nrrd/.mha) under StreamingAssets/Sample.
+        /// </summary>
+        private static List<string> CollectSegmentationSourcePathsUnderSample()
         {
             var results = new List<string>();
             var sampleDirectory = GetSampleDirectoryPath();
@@ -1144,8 +1164,39 @@ namespace SimpleITKUnity
                 results.Add(Path.GetFullPath(directoryPath));
             }
 
+            foreach (var filePath in Directory.GetFiles(sampleDirectory))
+            {
+                if (!IsSegmentableVolumeFileName(filePath))
+                {
+                    continue;
+                }
+
+                results.Add(Path.GetFullPath(filePath));
+            }
+
             results.Sort(StringComparer.OrdinalIgnoreCase);
             return results;
+        }
+
+        private static bool IsSegmentableVolumeFileName(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            var fileName = Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(fileName) ||
+                fileName.StartsWith(".", StringComparison.Ordinal) ||
+                fileName.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith("_seg.nrrd", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var extension = Path.GetExtension(fileName);
+            return string.Equals(extension, ".nrrd", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".mha", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool DirectoryContainsDicomFiles(string directoryPath)
@@ -1282,6 +1333,7 @@ namespace SimpleITKUnity
                     Debug.Log($"SimpleITKVolumeLoader: applied segmentation overlay '{resolvedPath}'.");
                 }
 
+                NotifySegmentationLabelToggleUi();
                 return true;
             }
 
@@ -1303,6 +1355,7 @@ namespace SimpleITKUnity
 
             if (targetRenderer.TryApplySegmentationVolumeData(segmentationData, sourcePathOrLabel, out var applyError))
             {
+                NotifySegmentationLabelToggleUi();
                 return true;
             }
 
@@ -1314,6 +1367,12 @@ namespace SimpleITKUnity
         private void ClearConfiguredSegmentation()
         {
             targetRenderer?.ClearSegmentationData();
+            NotifySegmentationLabelToggleUi();
+        }
+
+        private static void NotifySegmentationLabelToggleUi()
+        {
+            SegmentationLabelToggleUI.RefreshAllInScene(force: true);
         }
 
         private static void LogSegmentationWarning(bool enabled, string operation, string detail)

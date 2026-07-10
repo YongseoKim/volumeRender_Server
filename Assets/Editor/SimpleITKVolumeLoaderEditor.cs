@@ -30,8 +30,8 @@ namespace SimpleITKUnity.Editor
             else
             {
                 EditorGUILayout.HelpBox(
-                    "Scans StreamingAssets/Sample for DICOM series folders and writes " +
-                    "{seriesName}_seg.nrrd files to Assets/StreamingAssets.",
+                    "Scans StreamingAssets/Sample for DICOM series folders and volume files " +
+                    "(.nrrd/.mha), then writes {name}_seg.nrrd files to StreamingAssets/Segmented.",
                     MessageType.Info);
             }
         }
