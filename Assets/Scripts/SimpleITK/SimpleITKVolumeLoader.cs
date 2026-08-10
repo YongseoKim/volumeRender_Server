@@ -985,7 +985,7 @@ namespace SimpleITKUnity
         }
 
         /// <summary>
-        /// BraTS samples use the BraTS palette; DICOM/UNet and other samples use UnetBrain.
+        /// BraTS samples use the BraTS palette; other samples use HD-BET whole-brain palette.
         /// </summary>
         private static string ResolveSegmentationColorMapFileNameForSample(string sampleEntry)
         {
@@ -997,7 +997,7 @@ namespace SimpleITKUnity
                 return "BraTSSegmentationColorMap.txt";
             }
 
-            return "UnetBrainSegmentationColorMap.txt";
+            return "HdBetSegmentationColorMap.txt";
         }
 
         /// <summary>

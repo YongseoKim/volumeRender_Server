@@ -73,3 +73,7 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# HD-BET export virtualenv / local validation outputs
+/Tools/HdBet/.venv/
+/Tools/HdBet/_validate_out/

@@ -1,0 +1,53 @@
+{
+  "model_name": "HD-BET",
+  "source": "https://github.com/MIC-DKFZ/HD-BET",
+  "parameter_folder": "C:\\Users\\user\\hd-bet_params\\release_2.0.0",
+  "fold": "all",
+  "opset": 17,
+  "onnx_file": "hd_bet.onnx",
+  "input_name": "input",
+  "output_name": "output",
+  "num_input_channels": 1,
+  "num_output_channels": 2,
+  "patch_size": [
+    96,
+    192,
+    192
+  ],
+  "spacing": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "tile_step_size": 0.5,
+  "use_gaussian": true,
+  "use_mirroring_default": false,
+  "transpose_forward": [
+    0,
+    1,
+    2
+  ],
+  "transpose_backward": [
+    0,
+    1,
+    2
+  ],
+  "normalization_schemes": [
+    "ZScoreNormalization"
+  ],
+  "dataset_json": {
+    "channel_names": {
+      "0": "MRI"
+    },
+    "labels": {
+      "background": 0,
+      "brain": 1
+    },
+    "file_ending": ".nii.gz"
+  },
+  "notes": [
+    "ONNX contains the nnU-Net backbone only.",
+    "Unity must reimplement crop-to-nonzero, resample to spacing, z-score, sliding-window, and restore.",
+    "HD-BET weights are typically CC BY-NC 4.0; verify license before commercial redistribution."
+  ]
+}

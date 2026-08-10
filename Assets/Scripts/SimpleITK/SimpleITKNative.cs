@@ -572,6 +572,233 @@ namespace SimpleITKUnity
             }
         }
 
+        /// <summary>
+        /// Resample a scalar volume to a target isotropic (or anisotropic) spacing using linear interpolation.
+        /// Preserves origin/direction; output size is derived from physical extent.
+        /// </summary>
+        public static bool TryResampleScalarVolume(
+            SimpleITKScalarVolumeData source,
+            double[] targetSpacing,
+            out SimpleITKScalarVolumeData resampled,
+            out string error)
+        {
+            return TryResampleScalarVolume(
+                source,
+                targetSpacing,
+                InterpolatorEnum.sitkLinear,
+                out resampled,
+                out error);
+        }
+
+        public static bool TryResampleScalarVolume(
+            SimpleITKScalarVolumeData source,
+            double[] targetSpacing,
+            InterpolatorEnum interpolator,
+            out SimpleITKScalarVolumeData resampled,
+            out string error)
+        {
+            resampled = default;
+            error = string.Empty;
+            interpolator ??= InterpolatorEnum.sitkLinear;
+
+            if (!TryValidateScalarVolume(source, out error))
+            {
+                return false;
+            }
+
+            if (targetSpacing == null || targetSpacing.Length < 3 ||
+                targetSpacing[0] <= 0.0 || targetSpacing[1] <= 0.0 || targetSpacing[2] <= 0.0)
+            {
+                error = "targetSpacing must contain three positive values.";
+                return false;
+            }
+
+            try
+            {
+                using var sourceImage = CreateFloatImageFromScalarVolume(source);
+                using var resampledImage = ResampleImageToSpacing(sourceImage, targetSpacing, interpolator, defaultPixelValue: 0.0);
+                return TryConvertFloatImageToScalarVolume(resampledImage, out resampled, out error);
+            }
+            catch (Exception ex)
+            {
+                error = BuildPluginLoadError(ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Resample a label volume onto a reference geometry using nearest-neighbor interpolation.
+        /// </summary>
+        public static bool TryResampleLabelVolumeToReference(
+            SimpleITKLabelVolumeData source,
+            SimpleITKImageInfo referenceInfo,
+            out SimpleITKLabelVolumeData resampled,
+            out string error)
+        {
+            resampled = default;
+            error = string.Empty;
+
+            if (!TryValidateLabelVolume(source, out error))
+            {
+                return false;
+            }
+
+            if (!TryGet3DSize(referenceInfo, out var width, out var height, out var depth, out _, out error))
+            {
+                return false;
+            }
+
+            if (referenceInfo.Spacing == null || referenceInfo.Spacing.Length < 3 ||
+                referenceInfo.Origin == null || referenceInfo.Origin.Length < 3)
+            {
+                error = "Reference image info is missing spacing/origin.";
+                return false;
+            }
+
+            try
+            {
+                using var sourceImage = CreateUInt8ImageFromLabelVolume(source);
+                using var referenceImage = CreateBlankFloatReferenceImage(referenceInfo, width, height, depth);
+                using var resampleFilter = new ResampleImageFilter();
+                resampleFilter.SetReferenceImage(referenceImage);
+                resampleFilter.SetInterpolator(InterpolatorEnum.sitkNearestNeighbor);
+                resampleFilter.SetDefaultPixelValue(0.0);
+                using var resampledImage = resampleFilter.Execute(sourceImage);
+                return TryConvertUInt8ImageToLabelVolume(resampledImage, referenceInfo, out resampled, out error);
+            }
+            catch (Exception ex)
+            {
+                error = BuildPluginLoadError(ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Crop a scalar volume to the axis-aligned bounding box of non-zero voxels (inclusive),
+        /// returning the crop offset in voxel coordinates of the source volume.
+        /// </summary>
+        public static bool TryCropScalarVolumeToNonZero(
+            SimpleITKScalarVolumeData source,
+            out SimpleITKScalarVolumeData cropped,
+            out int offsetX,
+            out int offsetY,
+            out int offsetZ,
+            out string error)
+        {
+            cropped = default;
+            offsetX = 0;
+            offsetY = 0;
+            offsetZ = 0;
+            error = string.Empty;
+
+            if (!TryValidateScalarVolume(source, out error))
+            {
+                return false;
+            }
+
+            var minX = source.Width;
+            var minY = source.Height;
+            var minZ = source.Depth;
+            var maxX = -1;
+            var maxY = -1;
+            var maxZ = -1;
+
+            for (var z = 0; z < source.Depth; ++z)
+            {
+                for (var y = 0; y < source.Height; ++y)
+                {
+                    for (var x = 0; x < source.Width; ++x)
+                    {
+                        var index = ((z * source.Height) + y) * source.Width + x;
+                        if (Math.Abs(source.Voxels[index]) <= float.Epsilon)
+                        {
+                            continue;
+                        }
+
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (z < minZ) minZ = z;
+                        if (x > maxX) maxX = x;
+                        if (y > maxY) maxY = y;
+                        if (z > maxZ) maxZ = z;
+                    }
+                }
+            }
+
+            if (maxX < 0)
+            {
+                error = "Volume has no non-zero voxels to crop.";
+                return false;
+            }
+
+            offsetX = minX;
+            offsetY = minY;
+            offsetZ = minZ;
+            var cropWidth = maxX - minX + 1;
+            var cropHeight = maxY - minY + 1;
+            var cropDepth = maxZ - minZ + 1;
+            var cropVoxels = new float[cropWidth * cropHeight * cropDepth];
+
+            for (var z = 0; z < cropDepth; ++z)
+            {
+                for (var y = 0; y < cropHeight; ++y)
+                {
+                    for (var x = 0; x < cropWidth; ++x)
+                    {
+                        var sourceIndex = (((minZ + z) * source.Height) + (minY + y)) * source.Width + (minX + x);
+                        var destIndex = ((z * cropHeight) + y) * cropWidth + x;
+                        cropVoxels[destIndex] = source.Voxels[sourceIndex];
+                    }
+                }
+            }
+
+            var spacing = source.ImageInfo.Spacing ?? new[] { 1.0, 1.0, 1.0 };
+            var origin = source.ImageInfo.Origin ?? new[] { 0.0, 0.0, 0.0 };
+            var direction = source.ImageInfo.Direction ?? new[]
+            {
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0
+            };
+
+            // SimpleITK direction is row-major: physical = origin + D * (spacing .* index).
+            var newOrigin = new[] { origin[0], origin[1], origin[2] };
+            newOrigin[0] += direction[0] * spacing[0] * minX + direction[1] * spacing[1] * minY + direction[2] * spacing[2] * minZ;
+            newOrigin[1] += direction[3] * spacing[0] * minX + direction[4] * spacing[1] * minY + direction[5] * spacing[2] * minZ;
+            newOrigin[2] += direction[6] * spacing[0] * minX + direction[7] * spacing[1] * minY + direction[8] * spacing[2] * minZ;
+
+            float minValue = float.MaxValue;
+            float maxValue = float.MinValue;
+            for (var i = 0; i < cropVoxels.Length; ++i)
+            {
+                var value = cropVoxels[i];
+                if (value < minValue) minValue = value;
+                if (value > maxValue) maxValue = value;
+            }
+
+            cropped = new SimpleITKScalarVolumeData
+            {
+                Width = cropWidth,
+                Height = cropHeight,
+                Depth = cropDepth,
+                Voxels = cropVoxels,
+                ImageInfo = new SimpleITKImageInfo
+                {
+                    Dimension = 3,
+                    Size = new ulong[] { (ulong)cropWidth, (ulong)cropHeight, (ulong)cropDepth },
+                    Spacing = new[] { spacing[0], spacing[1], spacing[2] },
+                    Origin = newOrigin,
+                    Direction = (double[])direction.Clone(),
+                    PixelId = source.ImageInfo.PixelId,
+                    ComponentsPerPixel = 1
+                },
+                SourceMinimum = minValue,
+                SourceMaximum = maxValue
+            };
+
+            return true;
+        }
+
         public static bool TryWriteLabelVolumeUInt8(
             string imagePath,
             SimpleITKLabelVolumeData volumeData,
@@ -665,6 +892,328 @@ namespace SimpleITKUnity
                 error = BuildPluginLoadError(ex);
                 return false;
             }
+        }
+
+        private static bool TryValidateScalarVolume(SimpleITKScalarVolumeData volumeData, out string error)
+        {
+            error = string.Empty;
+            if (volumeData.Width <= 0 || volumeData.Height <= 0 || volumeData.Depth <= 0)
+            {
+                error =
+                    $"Scalar volume dimensions must be positive, received ({volumeData.Width}, {volumeData.Height}, {volumeData.Depth}).";
+                return false;
+            }
+
+            var expected = volumeData.Width * volumeData.Height * volumeData.Depth;
+            if (volumeData.Voxels == null || volumeData.Voxels.Length != expected)
+            {
+                error =
+                    $"Scalar volume voxel buffer length mismatch. Expected {expected}, received {volumeData.Voxels?.Length ?? 0}.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryValidateLabelVolume(SimpleITKLabelVolumeData volumeData, out string error)
+        {
+            error = string.Empty;
+            if (volumeData.Width <= 0 || volumeData.Height <= 0 || volumeData.Depth <= 0)
+            {
+                error =
+                    $"Label volume dimensions must be positive, received ({volumeData.Width}, {volumeData.Height}, {volumeData.Depth}).";
+                return false;
+            }
+
+            var expected = volumeData.Width * volumeData.Height * volumeData.Depth;
+            if (volumeData.Voxels == null || volumeData.Voxels.Length != expected)
+            {
+                error =
+                    $"Label volume voxel buffer length mismatch. Expected {expected}, received {volumeData.Voxels?.Length ?? 0}.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static Image CreateFloatImageFromScalarVolume(SimpleITKScalarVolumeData volumeData)
+        {
+            using var importer = new ImportImageFilter();
+            using var size = new VectorUInt32(new[]
+            {
+                (uint)volumeData.Width,
+                (uint)volumeData.Height,
+                (uint)volumeData.Depth
+            });
+            importer.SetSize(size);
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Spacing, 3, out var spacing))
+            {
+                using (spacing)
+                {
+                    importer.SetSpacing(spacing);
+                }
+            }
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Origin, 3, out var origin))
+            {
+                using (origin)
+                {
+                    importer.SetOrigin(origin);
+                }
+            }
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Direction, 9, out var direction))
+            {
+                using (direction)
+                {
+                    importer.SetDirection(direction);
+                }
+            }
+
+            var handle = GCHandle.Alloc(volumeData.Voxels, GCHandleType.Pinned);
+            try
+            {
+                importer.SetBufferAsFloat(handle.AddrOfPinnedObject());
+                return importer.Execute();
+            }
+            finally
+            {
+                if (handle.IsAllocated)
+                {
+                    handle.Free();
+                }
+            }
+        }
+
+        private static Image CreateUInt8ImageFromLabelVolume(SimpleITKLabelVolumeData volumeData)
+        {
+            using var importer = new ImportImageFilter();
+            using var size = new VectorUInt32(new[]
+            {
+                (uint)volumeData.Width,
+                (uint)volumeData.Height,
+                (uint)volumeData.Depth
+            });
+            importer.SetSize(size);
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Spacing, 3, out var spacing))
+            {
+                using (spacing)
+                {
+                    importer.SetSpacing(spacing);
+                }
+            }
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Origin, 3, out var origin))
+            {
+                using (origin)
+                {
+                    importer.SetOrigin(origin);
+                }
+            }
+
+            if (TryCreateVectorDouble(volumeData.ImageInfo.Direction, 9, out var direction))
+            {
+                using (direction)
+                {
+                    importer.SetDirection(direction);
+                }
+            }
+
+            var handle = GCHandle.Alloc(volumeData.Voxels, GCHandleType.Pinned);
+            try
+            {
+                importer.SetBufferAsUInt8(handle.AddrOfPinnedObject());
+                return importer.Execute();
+            }
+            finally
+            {
+                if (handle.IsAllocated)
+                {
+                    handle.Free();
+                }
+            }
+        }
+
+        private static Image CreateBlankFloatReferenceImage(SimpleITKImageInfo info, int width, int height, int depth)
+        {
+            using var importer = new ImportImageFilter();
+            using var size = new VectorUInt32(new[] { (uint)width, (uint)height, (uint)depth });
+            importer.SetSize(size);
+
+            if (TryCreateVectorDouble(info.Spacing, 3, out var spacing))
+            {
+                using (spacing)
+                {
+                    importer.SetSpacing(spacing);
+                }
+            }
+
+            if (TryCreateVectorDouble(info.Origin, 3, out var origin))
+            {
+                using (origin)
+                {
+                    importer.SetOrigin(origin);
+                }
+            }
+
+            if (TryCreateVectorDouble(info.Direction, 9, out var direction))
+            {
+                using (direction)
+                {
+                    importer.SetDirection(direction);
+                }
+            }
+
+            var zeros = new float[width * height * depth];
+            var handle = GCHandle.Alloc(zeros, GCHandleType.Pinned);
+            try
+            {
+                importer.SetBufferAsFloat(handle.AddrOfPinnedObject());
+                return importer.Execute();
+            }
+            finally
+            {
+                if (handle.IsAllocated)
+                {
+                    handle.Free();
+                }
+            }
+        }
+
+        private static Image ResampleImageToSpacing(
+            Image sourceImage,
+            double[] targetSpacing,
+            InterpolatorEnum interpolator,
+            double defaultPixelValue)
+        {
+            using var sourceSize = sourceImage.GetSize();
+            using var sourceSpacing = sourceImage.GetSpacing();
+
+            var newSize = new uint[3];
+            for (var i = 0; i < 3; ++i)
+            {
+                var physical = sourceSize[i] * sourceSpacing[i];
+                newSize[i] = (uint)Math.Max(1, (int)Math.Round(physical / targetSpacing[i]));
+            }
+
+            using var resampleFilter = new ResampleImageFilter();
+            using var sizeVector = new VectorUInt32(newSize);
+            using var spacingVector = new VectorDouble(new[] { targetSpacing[0], targetSpacing[1], targetSpacing[2] });
+            resampleFilter.SetSize(sizeVector);
+            resampleFilter.SetOutputSpacing(spacingVector);
+            resampleFilter.SetOutputOrigin(sourceImage.GetOrigin());
+            resampleFilter.SetOutputDirection(sourceImage.GetDirection());
+            resampleFilter.SetInterpolator(interpolator);
+            resampleFilter.SetDefaultPixelValue(defaultPixelValue);
+            return resampleFilter.Execute(sourceImage);
+        }
+
+        private static bool TryConvertFloatImageToScalarVolume(
+            Image image,
+            out SimpleITKScalarVolumeData volumeData,
+            out string error)
+        {
+            volumeData = default;
+            error = string.Empty;
+
+            var imageInfo = ConvertToManaged(image);
+            if (!TryGet3DSize(imageInfo, out var width, out var height, out var depth, out var voxelCount, out error))
+            {
+                return false;
+            }
+
+            using var imageFloat = SimpleITK.Cast(image, PixelIDValueEnum.sitkFloat32);
+            using var statisticsFilter = new StatisticsImageFilter();
+            statisticsFilter.Execute(imageFloat);
+
+            var sourcePointer = imageFloat.GetConstBufferAsFloat();
+            if (sourcePointer == IntPtr.Zero)
+            {
+                error = "SimpleITK returned a null source buffer.";
+                return false;
+            }
+
+            var sourceBuffer = new float[voxelCount];
+            Marshal.Copy(sourcePointer, sourceBuffer, 0, voxelCount);
+
+            volumeData = new SimpleITKScalarVolumeData
+            {
+                Width = width,
+                Height = height,
+                Depth = depth,
+                Voxels = sourceBuffer,
+                ImageInfo = imageInfo,
+                SourceMinimum = (float)statisticsFilter.GetMinimum(),
+                SourceMaximum = (float)statisticsFilter.GetMaximum()
+            };
+            return true;
+        }
+
+        private static bool TryConvertUInt8ImageToLabelVolume(
+            Image image,
+            SimpleITKImageInfo preferredInfo,
+            out SimpleITKLabelVolumeData volumeData,
+            out string error)
+        {
+            volumeData = default;
+            error = string.Empty;
+
+            var imageInfo = ConvertToManaged(image);
+            if (preferredInfo.Spacing != null && preferredInfo.Spacing.Length >= 3)
+            {
+                imageInfo.Spacing = preferredInfo.Spacing;
+            }
+
+            if (preferredInfo.Origin != null && preferredInfo.Origin.Length >= 3)
+            {
+                imageInfo.Origin = preferredInfo.Origin;
+            }
+
+            if (preferredInfo.Direction != null && preferredInfo.Direction.Length >= 9)
+            {
+                imageInfo.Direction = preferredInfo.Direction;
+            }
+
+            if (!TryGet3DSize(imageInfo, out var width, out var height, out var depth, out var voxelCount, out error))
+            {
+                return false;
+            }
+
+            using var imageFloat = SimpleITK.Cast(image, PixelIDValueEnum.sitkFloat32);
+            var sourcePointer = imageFloat.GetConstBufferAsFloat();
+            if (sourcePointer == IntPtr.Zero)
+            {
+                error = "SimpleITK returned a null label buffer.";
+                return false;
+            }
+
+            var sourceBuffer = new float[voxelCount];
+            Marshal.Copy(sourcePointer, sourceBuffer, 0, voxelCount);
+
+            var labels = new byte[voxelCount];
+            byte labelMaximum = 0;
+            for (var i = 0; i < sourceBuffer.Length; ++i)
+            {
+                var label = (byte)Math.Clamp((int)Math.Round(sourceBuffer[i]), 0, 255);
+                labels[i] = label;
+                if (label > labelMaximum)
+                {
+                    labelMaximum = label;
+                }
+            }
+
+            volumeData = new SimpleITKLabelVolumeData
+            {
+                Width = width,
+                Height = height,
+                Depth = depth,
+                Voxels = labels,
+                ImageInfo = imageInfo,
+                LabelMaximum = labelMaximum
+            };
+            return true;
         }
 
         private static SimpleITKImageInfo ConvertToManaged(Image image)
