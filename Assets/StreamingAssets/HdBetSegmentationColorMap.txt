@@ -1,2 +1,2 @@
 # Format: label,name,(r,g,b) or label,name,(r,g,b,a)
-1,Brain,(64,200,120,50)
+1,Brain,(64,180,255,160)

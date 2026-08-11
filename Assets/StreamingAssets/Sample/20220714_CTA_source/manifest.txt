@@ -1,5 +1,5 @@
 # Auto-generated. Do not edit manually.
-# Directory: 20220714.CTA_source
+# Directory: 20220714_CTA_source
 20220714.CTA_source00001.dcm
 20220714.CTA_source00002.dcm
 20220714.CTA_source00003.dcm

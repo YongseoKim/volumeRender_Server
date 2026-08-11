@@ -28,6 +28,14 @@ public static class VolumePayloadBuilder
         return Task.Run(() => Build(volumeData, chunkPayloadBytes, cancellationToken), cancellationToken);
     }
 
+    public static Task<BuiltPayload> BuildLabelAsync(
+        SimpleITKLabelVolumeData labelData,
+        int chunkPayloadBytes,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.Run(() => BuildLabel(labelData, chunkPayloadBytes, cancellationToken), cancellationToken);
+    }
+
     public static BuiltPayload Build(
         SimpleITKVolumeData volumeData,
         int chunkPayloadBytes,
@@ -44,6 +52,37 @@ public static class VolumePayloadBuilder
         var uncompressed = EncodeR16LittleEndian(normalized);
         cancellationToken.ThrowIfCancellationRequested();
 
+        return BuildCompressedPayload(uncompressed, chunkPayloadBytes, cancellationToken);
+    }
+
+    public static BuiltPayload BuildLabel(
+        SimpleITKLabelVolumeData labelData,
+        int chunkPayloadBytes,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var labels = labelData.Voxels;
+        if (labels == null || labels.Length == 0)
+        {
+            throw new InvalidOperationException("Label voxel buffer is empty.");
+        }
+
+        var expectedVoxels = labelData.Width * labelData.Height * labelData.Depth;
+        if (expectedVoxels <= 0 || labels.Length != expectedVoxels)
+        {
+            throw new InvalidOperationException(
+                $"Label voxel count mismatch. Expected {expectedVoxels}, received {labels.Length}.");
+        }
+
+        return BuildCompressedPayload(labels, chunkPayloadBytes, cancellationToken);
+    }
+
+    private static BuiltPayload BuildCompressedPayload(
+        byte[] uncompressed,
+        int chunkPayloadBytes,
+        CancellationToken cancellationToken)
+    {
         var compressed = DeflateCompress(uncompressed);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -75,6 +114,31 @@ public static class VolumePayloadBuilder
         }
 
         return bytes;
+    }
+
+    public static float[] DecodeR16LittleEndian(byte[] r16Bytes, int expectedVoxelCount)
+    {
+        if (r16Bytes == null)
+        {
+            throw new ArgumentNullException(nameof(r16Bytes));
+        }
+
+        var maxVoxels = r16Bytes.Length / sizeof(ushort);
+        if (expectedVoxelCount > maxVoxels)
+        {
+            throw new InvalidOperationException(
+                $"R16 payload is too small. Expected {expectedVoxelCount} voxels, buffer supports {maxVoxels}.");
+        }
+
+        var normalized = new float[expectedVoxelCount];
+        for (var i = 0; i < expectedVoxelCount; ++i)
+        {
+            var offset = i * sizeof(ushort);
+            var quantized = (ushort)(r16Bytes[offset] | (r16Bytes[offset + 1] << 8));
+            normalized[i] = quantized / 65535f;
+        }
+
+        return normalized;
     }
 
     public static byte[] DeflateCompress(byte[] input)
