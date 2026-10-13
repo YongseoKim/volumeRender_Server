@@ -287,6 +287,7 @@ public class VolumeDataNetServer : MonoBehaviour
         var colorMapFileName = string.IsNullOrWhiteSpace(segmentationColorMapFileName)
             ? result.ColorMapFileName
             : segmentationColorMapFileName;
+        var colors = LoadSegmentationColors(colorMapFileName);
         if (volumeLoader != null)
         {
             volumeLoader.TryApplyRuntimeSegmentation(result.CopyLabelVolume(), result.SourceLabel, colorMapFileName);
@@ -307,7 +308,8 @@ public class VolumeDataNetServer : MonoBehaviour
             payload.CompressedBytesLength,
             payload.TotalChunks,
             payload.PayloadCrc32,
-            colorMapFileName);
+            colorMapFileName,
+            colors);
 
         segmentationData.ConsumeVoxels();
 
@@ -324,7 +326,43 @@ public class VolumeDataNetServer : MonoBehaviour
 
         Debug.Log(
             $"{LogPrefix} Completed head segmentation transfer {transferId}: " +
-            $"compressed={payload.CompressedBytesLength} bytes, chunks={header.TotalChunks}.");
+            $"compressed={payload.CompressedBytesLength} bytes, chunks={header.TotalChunks}, colors={header.Colors.Length}.");
+    }
+
+    private static VolumeNetworkProtocol.SegmentationColor[] LoadSegmentationColors(string colorMapFileName)
+    {
+        if (!SimpleITKSegmentationColorMap.TryLoadPaletteFromStreamingAssets(
+                colorMapFileName,
+                out var colors,
+                out var names,
+                out var error))
+        {
+            Debug.LogWarning($"{LogPrefix} Segmentation colors were not loaded from '{colorMapFileName}': {error}");
+            return Array.Empty<VolumeNetworkProtocol.SegmentationColor>();
+        }
+
+        var entries = new List<VolumeNetworkProtocol.SegmentationColor>();
+        var count = Math.Min(colors.Length, names?.Length ?? 0);
+        for (var label = 1; label < count; ++label)
+        {
+            if (string.IsNullOrWhiteSpace(names[label]))
+            {
+                continue;
+            }
+
+            var color = (Color32)colors[label];
+            entries.Add(new VolumeNetworkProtocol.SegmentationColor
+            {
+                Label = (byte)label,
+                Name = names[label],
+                R = color.r,
+                G = color.g,
+                B = color.b,
+                A = color.a,
+            });
+        }
+
+        return entries.ToArray();
     }
 
     private async Task SendChunksAsync(
@@ -467,7 +505,7 @@ public class VolumeDataNetServer : MonoBehaviour
         for (var i = 0; i < recipientIds.Count; ++i)
         {
             using var writer = CreateWriter(
-                VolumeNetworkProtocol.EstimateSegmentationBeginMessageSize(header.ColorMapFileName));
+                VolumeNetworkProtocol.EstimateSegmentationBeginMessageSize(header.ColorMapFileName, header.Colors));
             VolumeNetworkProtocol.WriteSegmentationHeader(writer, header);
             SendVolumeMessage(
                 messaging,

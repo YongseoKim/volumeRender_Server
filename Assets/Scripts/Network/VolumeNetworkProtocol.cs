@@ -5,7 +5,8 @@ using Unity.Netcode;
 /// <summary>
 /// Chunked volume transfer messages between server and clients.
 /// Payload voxels are normalized to [0, 1] on the server, quantized to R16, then Deflate-compressed.
-/// Optional head-segmentation label overlays follow as a second U8 Deflate stream.
+/// The segmentation overlay follows as a second stream: one uint8 label per voxel,
+/// then the per-label RGBA colors the client uses to render each tissue.
 /// </summary>
 public static class VolumeNetworkProtocol
 {
@@ -21,7 +22,7 @@ public static class VolumeNetworkProtocol
     public const uint Magic = 0x31564F56; // "VOL1" little-endian
     public const uint SegmentationMagic = 0x31474553; // "SEG1" little-endian
     public const ushort Version = 1;
-    public const ushort SegmentationVersion = 1;
+    public const ushort SegmentationVersion = 2;
     public const string DefaultSegmentationColorMapFileName = "SiamBratsSegmentationColorMap.txt";
 
     /// <summary>
@@ -149,6 +150,20 @@ public static class VolumeNetworkProtocol
         }
     }
 
+    /// <summary>
+    /// One tissue or tumor label and the color the client should use when rendering it.
+    /// Channels are 0-255. Label 0 is background and is not sent.
+    /// </summary>
+    public struct SegmentationColor
+    {
+        public byte Label;
+        public string Name;
+        public byte R;
+        public byte G;
+        public byte B;
+        public byte A;
+    }
+
     public struct SegmentationHeader
     {
         public uint TransferId;
@@ -164,6 +179,7 @@ public static class VolumeNetworkProtocol
         public ushort TotalChunks;
         public uint PayloadCrc32;
         public string ColorMapFileName;
+        public SegmentationColor[] Colors;
 
         public static SegmentationHeader Create(
             uint transferId,
@@ -177,7 +193,8 @@ public static class VolumeNetworkProtocol
             uint compressedPayloadBytes,
             ushort totalChunks,
             uint payloadCrc32,
-            string colorMapFileName)
+            string colorMapFileName,
+            SegmentationColor[] colors)
         {
             return new SegmentationHeader
             {
@@ -196,6 +213,7 @@ public static class VolumeNetworkProtocol
                 ColorMapFileName = string.IsNullOrWhiteSpace(colorMapFileName)
                     ? DefaultSegmentationColorMapFileName
                     : colorMapFileName.Trim(),
+                Colors = colors ?? Array.Empty<SegmentationColor>(),
             };
         }
     }
@@ -299,7 +317,7 @@ public static class VolumeNetworkProtocol
         }
 
         reader.ReadValueSafe(out ushort version);
-        if (version != SegmentationVersion)
+        if (version < 1 || version > SegmentationVersion)
         {
             error = $"Unsupported segmentation protocol version: {version}";
             return false;
@@ -318,6 +336,30 @@ public static class VolumeNetworkProtocol
         reader.ReadValueSafe(out ushort totalChunks);
         reader.ReadValueSafe(out uint payloadCrc32);
         reader.ReadValueSafe(out string colorMapFileName);
+        var colors = Array.Empty<SegmentationColor>();
+        if (version >= 2)
+        {
+            reader.ReadValueSafe(out ushort colorCount);
+            colors = new SegmentationColor[colorCount];
+            for (var i = 0; i < colorCount; ++i)
+            {
+                reader.ReadValueSafe(out byte label);
+                reader.ReadValueSafe(out string name);
+                reader.ReadValueSafe(out byte r);
+                reader.ReadValueSafe(out byte g);
+                reader.ReadValueSafe(out byte b);
+                reader.ReadValueSafe(out byte a);
+                colors[i] = new SegmentationColor
+                {
+                    Label = label,
+                    Name = name ?? string.Empty,
+                    R = r,
+                    G = g,
+                    B = b,
+                    A = a,
+                };
+            }
+        }
 
         header = new SegmentationHeader
         {
@@ -336,6 +378,7 @@ public static class VolumeNetworkProtocol
             ColorMapFileName = string.IsNullOrWhiteSpace(colorMapFileName)
                 ? DefaultSegmentationColorMapFileName
                 : colorMapFileName,
+            Colors = colors,
         };
 
         return true;
@@ -465,6 +508,19 @@ public static class VolumeNetworkProtocol
         writer.WriteValueSafe(header.TotalChunks);
         writer.WriteValueSafe(header.PayloadCrc32);
         writer.WriteValueSafe(header.ColorMapFileName ?? DefaultSegmentationColorMapFileName);
+        var colors = header.Colors ?? Array.Empty<SegmentationColor>();
+        writer.WriteValueSafe((ushort)Math.Min(colors.Length, ushort.MaxValue));
+        var count = Math.Min(colors.Length, ushort.MaxValue);
+        for (var i = 0; i < count; ++i)
+        {
+            var color = colors[i];
+            writer.WriteValueSafe(color.Label);
+            writer.WriteValueSafe(color.Name ?? string.Empty);
+            writer.WriteValueSafe(color.R);
+            writer.WriteValueSafe(color.G);
+            writer.WriteValueSafe(color.B);
+            writer.WriteValueSafe(color.A);
+        }
     }
 
     public static void WriteChunk(
@@ -500,7 +556,7 @@ public static class VolumeNetworkProtocol
         return sizeof(uint) * 6 + sizeof(int) * 5 + sizeof(ushort) * 2 + sizeof(float) * 17 + sizeof(byte) * 2;
     }
 
-    public static int EstimateSegmentationBeginMessageSize(string colorMapFileName)
+    public static int EstimateSegmentationBeginMessageSize(string colorMapFileName, SegmentationColor[] colors)
     {
         // FastBufferWriter.WriteValueSafe(string) encodes UTF-16 (2 bytes/char) + length prefix.
         var colorMap = string.IsNullOrWhiteSpace(colorMapFileName)
@@ -509,9 +565,21 @@ public static class VolumeNetworkProtocol
         var fixedBytes =
             sizeof(uint) * 5 +
             sizeof(int) * 4 +
-            sizeof(ushort) * 2 +
+            sizeof(ushort) * 3 +
             sizeof(byte) * 3;
-        return fixedBytes + FastBufferWriter.GetWriteSize(colorMap) + 32;
+        var size = fixedBytes + FastBufferWriter.GetWriteSize(colorMap) + 32;
+        if (colors == null)
+        {
+            return size;
+        }
+
+        var count = Math.Min(colors.Length, ushort.MaxValue);
+        for (var i = 0; i < count; ++i)
+        {
+            size += sizeof(byte) * 5 + FastBufferWriter.GetWriteSize(colors[i].Name ?? string.Empty);
+        }
+
+        return size;
     }
 
     public static int EstimateChunkMessageSize(int chunkPayloadBytes)
