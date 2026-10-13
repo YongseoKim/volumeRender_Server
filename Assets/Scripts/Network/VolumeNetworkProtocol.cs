@@ -5,7 +5,7 @@ using Unity.Netcode;
 /// <summary>
 /// Chunked volume transfer messages between server and clients.
 /// Payload voxels are normalized to [0, 1] on the server, quantized to R16, then Deflate-compressed.
-/// Optional HD-BET (or other) label overlays follow as a second U8 Deflate stream.
+/// Optional head-segmentation label overlays follow as a second U8 Deflate stream.
 /// </summary>
 public static class VolumeNetworkProtocol
 {
@@ -22,7 +22,7 @@ public static class VolumeNetworkProtocol
     public const uint SegmentationMagic = 0x31474553; // "SEG1" little-endian
     public const ushort Version = 1;
     public const ushort SegmentationVersion = 1;
-    public const string DefaultHdBetColorMapFileName = "HdBetSegmentationColorMap.txt";
+    public const string DefaultSegmentationColorMapFileName = "SiamBratsSegmentationColorMap.txt";
 
     /// <summary>
     /// Volume chunks exceed the default reliable sequenced payload limit (~1.2 KB).
@@ -194,7 +194,7 @@ public static class VolumeNetworkProtocol
                 TotalChunks = totalChunks,
                 PayloadCrc32 = payloadCrc32,
                 ColorMapFileName = string.IsNullOrWhiteSpace(colorMapFileName)
-                    ? DefaultHdBetColorMapFileName
+                    ? DefaultSegmentationColorMapFileName
                     : colorMapFileName.Trim(),
             };
         }
@@ -334,7 +334,7 @@ public static class VolumeNetworkProtocol
             TotalChunks = totalChunks,
             PayloadCrc32 = payloadCrc32,
             ColorMapFileName = string.IsNullOrWhiteSpace(colorMapFileName)
-                ? DefaultHdBetColorMapFileName
+                ? DefaultSegmentationColorMapFileName
                 : colorMapFileName,
         };
 
@@ -464,7 +464,7 @@ public static class VolumeNetworkProtocol
         writer.WriteValueSafe(header.CompressedPayloadBytes);
         writer.WriteValueSafe(header.TotalChunks);
         writer.WriteValueSafe(header.PayloadCrc32);
-        writer.WriteValueSafe(header.ColorMapFileName ?? DefaultHdBetColorMapFileName);
+        writer.WriteValueSafe(header.ColorMapFileName ?? DefaultSegmentationColorMapFileName);
     }
 
     public static void WriteChunk(
@@ -504,7 +504,7 @@ public static class VolumeNetworkProtocol
     {
         // FastBufferWriter.WriteValueSafe(string) encodes UTF-16 (2 bytes/char) + length prefix.
         var colorMap = string.IsNullOrWhiteSpace(colorMapFileName)
-            ? DefaultHdBetColorMapFileName
+            ? DefaultSegmentationColorMapFileName
             : colorMapFileName;
         var fixedBytes =
             sizeof(uint) * 5 +

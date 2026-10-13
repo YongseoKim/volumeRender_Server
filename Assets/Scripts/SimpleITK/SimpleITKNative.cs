@@ -894,6 +894,53 @@ namespace SimpleITKUnity
             }
         }
 
+        /// <summary>
+        /// Writes the source volume (a file or a DICOM series directory) as a gzipped NIfTI.
+        /// Intensities are preserved for external tools such as siamize.
+        /// </summary>
+        public static bool TryExportVolumeAsNifti(string sourcePath, string niftiPath, out string error)
+        {
+            error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                error = "sourcePath must not be empty.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(niftiPath))
+            {
+                error = "niftiPath must not be empty.";
+                return false;
+            }
+
+            try
+            {
+                if (!TryReadImageWithDicomSupport(sourcePath, out var image, out error))
+                {
+                    return false;
+                }
+
+                using (image)
+                {
+                    var parentDirectory = Path.GetDirectoryName(niftiPath);
+                    if (!string.IsNullOrWhiteSpace(parentDirectory))
+                    {
+                        Directory.CreateDirectory(parentDirectory);
+                    }
+
+                    SimpleITK.WriteImage(image, niftiPath, true);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = BuildPluginLoadError(ex);
+                return false;
+            }
+        }
+
         private static bool TryValidateScalarVolume(SimpleITKScalarVolumeData volumeData, out string error)
         {
             error = string.Empty;

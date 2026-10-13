@@ -244,6 +244,7 @@ namespace SimpleITKUnity
 
                 viewController?.AutoFitRoiFromData(volumeData);
 
+                var loadedImageInfo = volumeData.ImageInfo;
                 var applied = targetRenderer.UsesSpreadVolumeTextureUpload
                     ? await targetRenderer.ApplyVolumeDataAsync(volumeData, resolvedPath, token)
                     : targetRenderer.ApplyVolumeData(volumeData, resolvedPath);
@@ -261,7 +262,14 @@ namespace SimpleITKUnity
 
                     // Apply segmentation as soon as the volume texture exists. Do not wait for the
                     // deferred 3D-mesh frame gate — that wait can be cancelled and previously skipped seg load.
-                    await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token, logFailures: true);
+                    await ApplyHeadSegmentationAfterVolumeLoadAsync(
+                        readablePath,
+                        loadedImageInfo,
+                        loadedWidth,
+                        loadedHeight,
+                        loadedDepth,
+                        requestVersion,
+                        token);
 
                     if (targetRenderer.IsDeferringVolumeMeshRendering)
                     {
@@ -969,7 +977,7 @@ namespace SimpleITKUnity
         private void AssignSegmentationSourceForSample(string sampleEntry)
         {
             segmentationSampleFileName = BuildMatchingSegmentationSampleFileName(sampleEntry);
-            segmentationColorMapFileName = ResolveSegmentationColorMapFileNameForSample(sampleEntry);
+            segmentationColorMapFileName = ResolveSegmentationColorMapFileNameForSample();
         }
 
         /// <summary>
@@ -985,19 +993,11 @@ namespace SimpleITKUnity
         }
 
         /// <summary>
-        /// BraTS samples use the BraTS palette; other samples use HD-BET whole-brain palette.
+        /// Tissue labels 0-17 and tumor labels 21, 22, 24 share one palette.
         /// </summary>
-        private static string ResolveSegmentationColorMapFileNameForSample(string sampleEntry)
+        private static string ResolveSegmentationColorMapFileNameForSample()
         {
-            var normalizedSample = (sampleEntry ?? string.Empty).Replace('\\', '/').Trim().TrimStart('/');
-            var sampleLeaf = Path.GetFileName(normalizedSample.TrimEnd('/'));
-            if (!string.IsNullOrWhiteSpace(sampleLeaf) &&
-                sampleLeaf.IndexOf("brats", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return "BraTSSegmentationColorMap.txt";
-            }
-
-            return "HdBetSegmentationColorMap.txt";
+            return VolumeNetworkProtocol.DefaultSegmentationColorMapFileName;
         }
 
         /// <summary>
@@ -1340,6 +1340,86 @@ namespace SimpleITKUnity
             LogSegmentationWarning(logFailures, "failed to load segmentation overlay", loadError);
             ClearConfiguredSegmentation();
             return false;
+        }
+
+        /// <summary>
+        /// Paints a runtime siamize/BraTS label map on the local renderer.
+        /// </summary>
+        public bool TryApplyRuntimeSegmentation(
+            SimpleITKLabelVolumeData segmentationData,
+            string sourceLabel,
+            string colorMapFileName)
+        {
+            if (!string.IsNullOrWhiteSpace(colorMapFileName))
+            {
+                segmentationColorMapFileName = colorMapFileName.Trim();
+            }
+
+            ResolveTargets();
+            if (targetRenderer == null)
+            {
+                return false;
+            }
+
+            if (!targetRenderer.TryApplySegmentationVolumeData(segmentationData, sourceLabel, out var applyError))
+            {
+                Debug.LogWarning($"SimpleITKVolumeLoader: head segmentation was not applied: {applyError}");
+                return false;
+            }
+
+            NotifySegmentationLabelToggleUi();
+            return true;
+        }
+
+        private async Task ApplyHeadSegmentationAfterVolumeLoadAsync(
+            string readablePath,
+            SimpleITKImageInfo imageInfo,
+            int width,
+            int height,
+            int depth,
+            int requestVersion,
+            CancellationToken token)
+        {
+            if (!Application.isPlaying)
+            {
+                await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token, logFailures: true);
+                return;
+            }
+
+            var runner = FindFirstObjectByType<HeadSegmentationRunner>(FindObjectsInactive.Include);
+            if (runner == null)
+            {
+                await ApplyConfiguredSegmentationAfterVolumeLoadAsync(token, logFailures: true);
+                return;
+            }
+
+            HeadSegmentationResult result;
+            try
+            {
+                result = await runner.SegmentAsync(readablePath, imageInfo, width, height, depth);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"SimpleITKVolumeLoader: head segmentation failed: {ex.Message}");
+                return;
+            }
+
+            if (token.IsCancellationRequested || this == null || requestVersion != _loadRequestVersion)
+            {
+                return;
+            }
+
+            if (result == null || !result.Success)
+            {
+                Debug.LogWarning($"SimpleITKVolumeLoader: head segmentation failed: {result?.Error}");
+                return;
+            }
+
+            TryApplyRuntimeSegmentation(result.CopyLabelVolume(), result.SourceLabel, result.ColorMapFileName);
         }
 
         private bool TryApplyConfiguredSegmentationData(

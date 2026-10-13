@@ -168,8 +168,8 @@ MonoBehaviour:
   viewController: {fileID: 1217221017}
   sampleFileName: 
   segmentationSampleFileName: DICOM_MRI_TOF_seg.nrrd
-  segmentationColorMapFileName: HdBetSegmentationColorMap.txt
-  segmentationInference: {fileID: 1987654422}
+  segmentationColorMapFileName: SiamBratsSegmentationColorMap.txt
+  segmentationInference: {fileID: 1917301989}
   loadedWidth: 512
   loadedHeight: 512
   loadedDepth: 200
@@ -3669,12 +3669,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::VolumeDataNetServer
   volumeLoader: {fileID: 41059783}
   processingController: {fileID: 1389359936}
-  hdBetInference: {fileID: 1987654422}
+  headSegmentation: {fileID: 1987654422}
   chunkPayloadBytes: 16384
   yieldEveryNChunks: 1
   pacedDelayMilliseconds: 2
-  sendHdBetSegmentation: 1
-  hdBetColorMapFileName: HdBetSegmentationColorMap.txt
+  sendHeadSegmentation: 1
+  segmentationColorMapFileName: SiamBratsSegmentationColorMap.txt
 --- !u!114 &868706417
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -9142,7 +9142,7 @@ MonoBehaviour:
   _lastAppliedVolumeColorPreset: 0
   _lastAppliedSliceTransferFunctionPresetName: Grayscale
   _lastAppliedSliceColorPreset: 0
-  _lastSegmentationColorMapPath: C:\Users\user\Desktop\volumeRender_Server\Assets\StreamingAssets\HdBetSegmentationColorMap.txt
+  _lastSegmentationColorMapPath: C:\Users\user\Desktop\volumeRender_Server\Assets\StreamingAssets\SiamBratsSegmentationColorMap.txt
   _lastSegmentationColorMapWriteTimeUtcTicks: 639219419051865059
   _lastSegmentationColorMapError: 
 --- !u!23 &1814410281
@@ -9277,14 +9277,14 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1917301987}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ede2c6103b2d243c5a15f1a1512e137f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.BratsSentisInference
   modelAsset: {fileID: 5022602860645237092, guid: c619b06f72bfd4a89823f4fca4980dde, type: 3}
-  backendPreference: 2
-  tumorCoreThreshold: 1
+  backendPreference: 1
+  tumorCoreThreshold: 0.5
   wholeTumorThreshold: 0.5
   enhancingTumorThreshold: 0.5
   lastRunSummary: backend=CPU, requested=CPU, input=(240, 240, 155), pad=[x:0/0,
@@ -9682,7 +9682,7 @@ GameObject:
   - component: {fileID: 1987654421}
   - component: {fileID: 1987654422}
   m_Layer: 0
-  m_Name: HdBetSegmentationModel
+  m_Name: HeadSegmentation
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -9712,15 +9712,13 @@ MonoBehaviour:
   m_GameObject: {fileID: 1987654420}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: c3e8a1b0f4d24f6e9a7c2d5b8e1f3a6c, type: 3}
+  m_Script: {fileID: 11500000, guid: a7c3e91b4d2f4e6a8b0c1d3e5f709182, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.HdBetSentisInference
-  modelAsset: {fileID: 5022602860645237092, guid: b7d4e2a19c8f4e5a9b3d6c1e0f2a8d4e, type: 3}
-  backendPreference: 2
-  foregroundThreshold: 0.5
-  useGaussianImportance: 1
-  lastRunSummary: backend=CPU, requested=CPU, input=(512, 512, 172), model=(193,
-    235, 86), patches=4, elapsedMs=10762.8, labels<=1
+  m_EditorClassIdentifier: Assembly-CSharp::SimpleITKUnity.HeadSegmentationRunner
+  bratsInference: {fileID: 1917301989}
+  siamizeExecutable: 
+  compute: cuda
+  folds: 0
 --- !u!1 &2002883114
 GameObject:
   m_ObjectHideFlags: 0

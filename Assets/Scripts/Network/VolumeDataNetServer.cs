@@ -19,14 +19,14 @@ public class VolumeDataNetServer : MonoBehaviour
     [Header("Dependencies")]
     [SerializeField] private SimpleITKVolumeLoader volumeLoader;
     [SerializeField] private SimpleITKProcessingController processingController;
-    [SerializeField] private HdBetSentisInference hdBetInference;
+    [SerializeField] private HeadSegmentationRunner headSegmentation;
 
     [Header("Transfer")]
     [SerializeField, Min(1024)] private int chunkPayloadBytes = 16384;
     [SerializeField, Min(0)] private int yieldEveryNChunks = 1;
     [SerializeField, Min(0)] private int pacedDelayMilliseconds = 2;
-    [SerializeField] private bool sendHdBetSegmentation = true;
-    [SerializeField] private string hdBetColorMapFileName = VolumeNetworkProtocol.DefaultHdBetColorMapFileName;
+    [SerializeField] private bool sendHeadSegmentation = true;
+    [SerializeField] private string segmentationColorMapFileName = VolumeNetworkProtocol.DefaultSegmentationColorMapFileName;
 
     private CancellationTokenSource _transferCts;
     private uint _nextTransferId = 1;
@@ -137,6 +137,21 @@ public class VolumeDataNetServer : MonoBehaviour
                 return;
             }
 
+            Task<HeadSegmentationResult> segmentationTask = null;
+            if (sendHeadSegmentation)
+            {
+                ResolveDependencies();
+                if (headSegmentation != null)
+                {
+                    segmentationTask = headSegmentation.SegmentAsync(
+                        resolvedPath,
+                        volumeData.ImageInfo,
+                        volumeData.Width,
+                        volumeData.Height,
+                        volumeData.Depth);
+                }
+            }
+
             var payload = await VolumePayloadBuilder.BuildAsync(volumeData, chunkPayloadBytes, token);
             token.ThrowIfCancellationRequested();
 
@@ -168,12 +183,12 @@ public class VolumeDataNetServer : MonoBehaviour
                 $"{header.Width}x{header.Height}x{header.Depth}, " +
                 $"compressed={payload.CompressedBytesLength} bytes, chunks={header.TotalChunks}, clients={recipientIds.Count}.");
 
-            if (sendHdBetSegmentation)
+            if (segmentationTask != null)
             {
-                await SendHdBetSegmentationAsync(
+                await SendHeadSegmentationAsync(
                     transferId,
                     sampleIndex,
-                    resolvedPath,
+                    segmentationTask,
                     header.Width,
                     header.Height,
                     header.Depth,
@@ -226,51 +241,56 @@ public class VolumeDataNetServer : MonoBehaviour
         return SimpleITKVolumeProcessingOptions.Disabled;
     }
 
-    private async Task SendHdBetSegmentationAsync(
+    private async Task SendHeadSegmentationAsync(
         uint transferId,
         int sampleIndex,
-        string volumePath,
+        Task<HeadSegmentationResult> segmentationTask,
         int expectedWidth,
         int expectedHeight,
         int expectedDepth,
         IReadOnlyList<ulong> recipientIds,
         CancellationToken token)
     {
-        ResolveDependencies();
-        if (hdBetInference == null)
+        Debug.Log($"{LogPrefix} Waiting for siamize and BraTS on transfer {transferId}...");
+        HeadSegmentationResult result;
+        try
         {
-            Debug.LogWarning($"{LogPrefix} HD-BET inference component is missing; skipping segmentation transfer {transferId}.");
-            return;
+            result = await segmentationTask;
         }
-
-        Debug.Log($"{LogPrefix} Running HD-BET for transfer {transferId}...");
-        // Sentis workers must run on the Unity main thread.
-        await Task.Yield();
-        token.ThrowIfCancellationRequested();
-
-        if (!hdBetInference.TryPrepareSegmentationForVolume(
-                volumePath,
-                out var segmentationData,
-                out var summary,
-                out var error))
+        catch (OperationCanceledException)
         {
-            Debug.LogWarning($"{LogPrefix} HD-BET failed for transfer {transferId}: {error}");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"{LogPrefix} Head segmentation failed for transfer {transferId}: {ex.Message}");
             return;
         }
 
         token.ThrowIfCancellationRequested();
 
-        if (segmentationData.Width != expectedWidth ||
-            segmentationData.Height != expectedHeight ||
-            segmentationData.Depth != expectedDepth)
+        if (result == null || !result.Success)
+        {
+            Debug.LogWarning($"{LogPrefix} Head segmentation failed for transfer {transferId}: {result?.Error}");
+            return;
+        }
+
+        if (result.Width != expectedWidth || result.Height != expectedHeight || result.Depth != expectedDepth)
         {
             Debug.LogWarning(
-                $"{LogPrefix} HD-BET dimensions ({segmentationData.Width},{segmentationData.Height},{segmentationData.Depth}) " +
+                $"{LogPrefix} Head segmentation dimensions ({result.Width},{result.Height},{result.Depth}) " +
                 $"do not match volume ({expectedWidth},{expectedHeight},{expectedDepth}); skipping transfer {transferId}.");
             return;
         }
 
-        Debug.Log($"{LogPrefix} HD-BET ready for transfer {transferId}: {summary}");
+        var segmentationData = result.CopyLabelVolume();
+        var colorMapFileName = string.IsNullOrWhiteSpace(segmentationColorMapFileName)
+            ? result.ColorMapFileName
+            : segmentationColorMapFileName;
+        if (volumeLoader != null)
+        {
+            volumeLoader.TryApplyRuntimeSegmentation(result.CopyLabelVolume(), result.SourceLabel, colorMapFileName);
+        }
 
         var payload = await VolumePayloadBuilder.BuildLabelAsync(segmentationData, chunkPayloadBytes, token);
         token.ThrowIfCancellationRequested();
@@ -287,7 +307,7 @@ public class VolumeDataNetServer : MonoBehaviour
             payload.CompressedBytesLength,
             payload.TotalChunks,
             payload.PayloadCrc32,
-            hdBetColorMapFileName);
+            colorMapFileName);
 
         segmentationData.ConsumeVoxels();
 
@@ -303,7 +323,7 @@ public class VolumeDataNetServer : MonoBehaviour
         SendSegmentationEnd(transferId, header.PayloadCrc32, recipientIds);
 
         Debug.Log(
-            $"{LogPrefix} Completed HD-BET segmentation transfer {transferId}: " +
+            $"{LogPrefix} Completed head segmentation transfer {transferId}: " +
             $"compressed={payload.CompressedBytesLength} bytes, chunks={header.TotalChunks}.");
     }
 
@@ -609,6 +629,6 @@ public class VolumeDataNetServer : MonoBehaviour
 
         processingController ??= FindFirstObjectByType<SimpleITKProcessingController>();
 
-        hdBetInference ??= FindFirstObjectByType<HdBetSentisInference>();
+        headSegmentation ??= FindFirstObjectByType<HeadSegmentationRunner>(FindObjectsInactive.Include);
     }
 }
